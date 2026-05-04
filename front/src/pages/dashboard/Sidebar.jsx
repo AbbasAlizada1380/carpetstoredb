@@ -53,8 +53,8 @@ const Sidebar = ({ setActiveComponent }) => {
       icon: <MdOutlineDashboardCustomize />,
     },
     {
-      name: "سفارشات جدید",
-      value: "Orders",
+      name: "فروشات",
+      value: "sells",
       icon: <MdAddShoppingCart />,
     },
     {

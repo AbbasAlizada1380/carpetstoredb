@@ -1,40 +1,42 @@
 import { Category, Type } from "../../Models/index.js";
 
-// Helper: Sync the categories array of a Type based on its related Category records
+// Helper: Sync the categories JSON array of a Type based on its related Category records
 const syncTypeCategories = async (typeId) => {
   if (!typeId) return;
+  const id = parseInt(typeId, 10);
   const categories = await Category.findAll({
-    where: { type: typeId },
-    attributes: ['id'] // store IDs; change to 'name' if you prefer names
+    where: { typeId: id },   // correct field name
+    attributes: ['id']
   });
   const categoryIds = categories.map(cat => cat.id);
   await Type.update(
     { categories: categoryIds },
-    { where: { id: typeId } }
+    { where: { id: id } }
   );
 };
 
 // ========== CREATE ==========
 export const createCategory = async (req, res) => {
   try {
-    const { name, type } = req.body;
+    let { name, type } = req.body;
 
-    // Check if the referenced Type exists
+    let typeId = null;
     if (type) {
-      const typeExists = await Type.findByPk(type);
+      typeId = parseInt(type, 10);
+      const typeExists = await Type.findByPk(typeId);
       if (!typeExists) {
         return res.status(400).json({ message: "Type with given 'type' id does not exist" });
       }
     }
 
-    const newCategory = await Category.create({ name, type });
+    const newCategory = await Category.create({ name, typeId });
 
-    // ✅ Sync the Type's categories array (add the new category)
-    await syncTypeCategories(type);
+    if (typeId) {
+      await syncTypeCategories(typeId);
+    }
 
-    // Optionally return the category with its Type
     const categoryWithType = await Category.findByPk(newCategory.id, {
-      include: [{ model: Type, as: "parentType" }]
+      include: [{ model: Type, as: "type" }]   // alias from association
     });
     res.status(201).json(categoryWithType);
   } catch (error) {
@@ -46,7 +48,7 @@ export const createCategory = async (req, res) => {
 export const getAllCategories = async (req, res) => {
   try {
     const categories = await Category.findAll({
-      include: [{ model: Type, as: "parentType" }],
+      include: [{ model: Type, as: "type" }],
       order: [["createdAt", "DESC"]],
     });
     res.status(200).json(categories);
@@ -60,7 +62,7 @@ export const getCategoryById = async (req, res) => {
   try {
     const { id } = req.params;
     const category = await Category.findByPk(id, {
-      include: [{ model: Type, as: "parentType" }]
+      include: [{ model: Type, as: "type" }]
     });
     if (!category) {
       return res.status(404).json({ message: "Category not found" });
@@ -75,43 +77,40 @@ export const getCategoryById = async (req, res) => {
 export const updateCategory = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, type } = req.body;
+    let { name, type } = req.body;
 
     const category = await Category.findByPk(id);
     if (!category) {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    const oldTypeId = category.type;
+    const oldTypeId = category.typeId;
 
-    // If type is being updated, verify the new Type exists
-    if (type !== undefined && type !== oldTypeId) {
-      const typeExists = await Type.findByPk(type);
-      if (!typeExists) {
-        return res.status(400).json({ message: "New 'type' Type does not exist" });
+    let newTypeId = null;
+    if (type !== undefined) {
+      if (type === null || type === "") {
+        newTypeId = null;
+      } else {
+        newTypeId = parseInt(type, 10);
+        const typeExists = await Type.findByPk(newTypeId);
+        if (!typeExists) {
+          return res.status(400).json({ message: "New 'type' Type does not exist" });
+        }
       }
     }
 
-    // Update fields
     if (name !== undefined) category.name = name;
-    if (type !== undefined) category.type = type;
+    if (type !== undefined) category.typeId = newTypeId;
 
     await category.save();
 
-    // ✅ Sync the old Type's categories (removal)
-    if (type !== undefined && type !== oldTypeId && oldTypeId) {
-      await syncTypeCategories(oldTypeId);
+    if (oldTypeId !== newTypeId) {
+      if (oldTypeId) await syncTypeCategories(oldTypeId);
+      if (newTypeId) await syncTypeCategories(newTypeId);
     }
-    // ✅ Sync the new Type's categories (addition)
-    if (type !== undefined && type !== oldTypeId && type) {
-      await syncTypeCategories(type);
-    }
-
-    // If only name changed and type stayed same, still need to sync? No, categories array unchanged.
-    // But if we store names, we might; here we store IDs so no need.
 
     const updatedCategory = await Category.findByPk(id, {
-      include: [{ model: Type, as: "parentType" }]
+      include: [{ model: Type, as: "type" }]
     });
     res.status(200).json(updatedCategory);
   } catch (error) {
@@ -128,11 +127,10 @@ export const deleteCategory = async (req, res) => {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    const typeId = category.type;
+    const typeId = category.typeId;
 
     await category.destroy();
 
-    // ✅ Sync the Type's categories array (remove this category)
     if (typeId) {
       await syncTypeCategories(typeId);
     }

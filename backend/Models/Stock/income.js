@@ -4,27 +4,41 @@ import sequelize from "../../dbconnection.js";
 const Income = sequelize.define(
   "Income",
   {
-    size: {
+    width: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      comment: "Width of the carpet (e.g., in meters or centimeters)",
+    },
+    color: {
       type: DataTypes.STRING,
       allowNull: false,
     },
-    quantity: {
+    degree: {
       type: DataTypes.STRING,
+      allowNull: true,
+      comment: "Quality grade or degree of the carpet",
     },
-    price: {
+    lotNumber: {
       type: DataTypes.STRING,
+      allowNull: false,
+      unique: true,
+      comment: "Batch or lot number for inventory tracking",
     },
-    money: {
-      type: DataTypes.STRING,
+    area: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment: "Total area (width × length, pre-computed if needed)",
     },
-    spent: {
-      type: DataTypes.STRING,
-    }
+    length: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      comment: "Length of the carpet",
+    },
   },
   {
     timestamps: true,
   }
 );
 
+
 export default Income;
-;

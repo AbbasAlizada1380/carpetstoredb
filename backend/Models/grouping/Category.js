@@ -8,10 +8,13 @@ const Category = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
-    type: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-    },
+typeId: {
+  type: DataTypes.INTEGER,
+  allowNull: true,
+  references: { model: "Types", key: "id" },
+  onUpdate: "CASCADE",
+  onDelete: "CASCADE",   // ← change SET NULL to CASCADE
+}
   },
   {
     timestamps: true,

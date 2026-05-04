@@ -3,31 +3,47 @@ import axios from "axios";
 import { FaEdit, FaTrash, FaCheck, FaTimes, FaSpinner } from "react-icons/fa";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
-const API_BASE_URL = `${BASE_URL}/type`;
+const API_BASE_URL = `${BASE_URL}/category`;
+const TYPES_API = `${BASE_URL}/type`;
 
-const TypeManager = () => {
+const CategoryManager = () => {
+  const [categories, setCategories] = useState([]);
   const [types, setTypes] = useState([]);
-  const [formData, setFormData] = useState({ name: "", categories: [] });
+  const [formData, setFormData] = useState({ name: "", type: "" });
   const [editingId, setEditingId] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState({ categories: true, types: true, submit: false });
   const [error, setError] = useState("");
 
   useEffect(() => {
+    fetchCategories();
     fetchTypes();
   }, []);
 
-  const fetchTypes = async () => {
-    setLoading(true);
+  const fetchCategories = async () => {
+    setLoading(prev => ({ ...prev, categories: true }));
     try {
       const response = await axios.get(API_BASE_URL);
-      setTypes(response.data);
+      setCategories(response.data);
       setError("");
     } catch (err) {
-      setError("بارگیری انواع ناکام ماند");
+      setError("بارگیری دسته‌بندی‌ها ناکام ماند");
       console.error(err);
     } finally {
-      setLoading(false);
+      setLoading(prev => ({ ...prev, categories: false }));
+    }
+  };
+
+  const fetchTypes = async () => {
+    setLoading(prev => ({ ...prev, types: true }));
+    try {
+      const response = await axios.get(TYPES_API);
+      setTypes(response.data);
+    } catch (err) {
+      console.error("Error fetching types:", err);
+      setTypes([]);
+    } finally {
+      setLoading(prev => ({ ...prev, types: false }));
     }
   };
 
@@ -36,72 +52,72 @@ const TypeManager = () => {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleCategoriesChange = (e) => {
-    const raw = e.target.value;
-    const array = raw.split(",").map((item) => item.trim()).filter(Boolean);
-    setFormData((prev) => ({ ...prev, categories: array }));
-  };
-
   const resetForm = () => {
-    setFormData({ name: "", categories: [] });
+    setFormData({ name: "", type: "" });
     setEditingId(null);
     setIsModalOpen(false);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    setLoading(prev => ({ ...prev, submit: true }));
     try {
       if (editingId) {
         await axios.put(`${API_BASE_URL}/${editingId}`, formData);
       } else {
         await axios.post(API_BASE_URL, formData);
       }
-      fetchTypes();
+      fetchCategories();
       resetForm();
     } catch (err) {
-      setError(editingId ? "ویرایش ناکام ماند" : "ایجاد ناکام ماند");
+      setError(err.response?.data?.message || (editingId ? "ویرایش ناکام ماند" : "ایجاد ناکام ماند"));
       console.error(err);
     } finally {
-      setLoading(false);
+      setLoading(prev => ({ ...prev, submit: false }));
     }
   };
 
-  const handleEdit = (type) => {
+  const handleEdit = (category) => {
     setFormData({
-      name: type.name,
-      categories: type.categories || [],
+      name: category.name,
+      type: category.type || "",
     });
-    setEditingId(type.id);
+    setEditingId(category.id);
     setIsModalOpen(true);
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("آیا از حذف این نوع مطمئن هستید؟")) return;
-    setLoading(true);
+    if (!window.confirm("آیا از حذف این دسته‌بندی مطمئن هستید؟")) return;
+    setLoading(prev => ({ ...prev, submit: true }));
     try {
       await axios.delete(`${API_BASE_URL}/${id}`);
-      fetchTypes();
+      fetchCategories();
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
       console.error(err);
     } finally {
-      setLoading(false);
+      setLoading(prev => ({ ...prev, submit: false }));
     }
+  };
+
+  // Helper to get type name by id
+  const getTypeName = (typeId) => {
+    const type = types.find(t => t.id === typeId);
+    return type ? type.name : "—";
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6 space-y-8" dir="rtl">
       {/* Header */}
       <div className="text-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت انواع</h1>
-        <p className="text-gray-600">ایجاد، ویرایش و حذف انواع</p>
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت دسته‌بندی‌ها</h1>
+        <p className="text-gray-600">ایجاد، ویرایش و حذف دسته‌بندی‌ها</p>
 
         {editingId && (
           <div className="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded-xl max-w-md mx-auto">
             <div className="flex items-center justify-center gap-2 text-yellow-800">
               <FaEdit className="h-5 w-5" />
-              <span className="font-semibold">حالت ویرایش – نوع #{editingId}</span>
+              <span className="font-semibold">حالت ویرایش – دسته‌بندی #{editingId}</span>
             </div>
           </div>
         )}
@@ -111,9 +127,9 @@ const TypeManager = () => {
       <div className="flex justify-center mb-6">
         <button
           onClick={() => setIsModalOpen(true)}
-          className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-xl hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md disabled:opacity-50 flex items-center gap-2"
+          className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-xl hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md flex items-center gap-2"
         >
-          افزودن نوع جدید
+          افزودن دسته‌بندی جدید
         </button>
       </div>
 
@@ -127,23 +143,23 @@ const TypeManager = () => {
         </div>
       )}
 
-      {/* Types List Section */}
+      {/* Categories List Section */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-        {/* Header gradient */}
+        {/* Gradient Header */}
         <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-full">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l5 5a2 2 0 01.586 1.414V19a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
               </div>
               <div>
-                <h2 className="text-xl font-bold">لیست انواع</h2>
-                <p className="text-sm text-white/80">مدیریت تمام انواع ثبت شده</p>
+                <h2 className="text-xl font-bold">لیست دسته‌بندی‌ها</h2>
+                <p className="text-sm text-white/80">مدیریت تمام دسته‌بندی‌های ثبت شده</p>
               </div>
             </div>
-            {loading && (
+            {(loading.categories || loading.types) && (
               <div className="flex items-center gap-2 text-sm bg-white/20 px-3 py-1 rounded-full">
                 <FaSpinner className="animate-spin" />
                 در حال بارگذاری...
@@ -153,19 +169,19 @@ const TypeManager = () => {
         </div>
 
         {/* Content */}
-        {loading && types.length === 0 ? (
+        {loading.categories || (loading.types && categories.length === 0) ? (
           <div className="flex flex-col items-center justify-center py-12">
             <FaSpinner className="text-4xl text-cyan-800 animate-spin mb-4" />
-            <p className="text-gray-600">در حال بارگذاری انواع...</p>
+            <p className="text-gray-600">در حال بارگذاری دسته‌بندی‌ها...</p>
           </div>
-        ) : types.length === 0 ? (
+        ) : categories.length === 0 ? (
           <div className="text-center py-16">
             <div className="flex flex-col items-center justify-center">
               <svg className="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
-              <p className="text-gray-500 text-lg">هیچ نوعی یافت نشد</p>
-              <p className="text-gray-400 text-sm mt-1">برای شروع، نوع جدیدی ایجاد کنید</p>
+              <p className="text-gray-500 text-lg">هیچ دسته‌بندی‌ای یافت نشد</p>
+              <p className="text-gray-400 text-sm mt-1">برای شروع، دسته‌بندی جدیدی ایجاد کنید</p>
             </div>
           </div>
         ) : (
@@ -174,40 +190,32 @@ const TypeManager = () => {
               <thead className="bg-blue-50 text-cyan-800">
                 <tr>
                   <th className="p-3 border-b font-semibold">شناسه</th>
-                  <th className="p-3 border-b font-semibold">نام</th>
-                  <th className="p-3 border-b font-semibold">دسته‌بندی‌ها</th>
+                  <th className="p-3 border-b font-semibold">نام دسته‌بندی</th>
+                  <th className="p-3 border-b font-semibold">نوع (Type)</th>
                   <th className="p-3 border-b font-semibold">عملیات</th>
                 </tr>
               </thead>
               <tbody>
-                {types.map((type) => (
-                  <tr key={type.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                    <td className="p-3 text-gray-600">{type.id}</td>
-                    <td className="p-3 font-medium text-gray-800">{type.name}</td>
+                {categories.map((category) => (
+                  <tr key={category.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                    <td className="p-3 text-gray-600">{category.id}</td>
+                    <td className="p-3 font-medium text-gray-800">{category.name}</td>
                     <td className="p-3">
-                      {type.categories?.length > 0 ? (
-                        <div className="flex flex-wrap justify-center gap-1">
-                          {type.categories.map((cat, idx) => (
-                            <span key={idx} className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">
-                              {cat}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
+                      <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm">
+                        {category.type.name}
+                      </span>
                     </td>
                     <td className="p-3">
                       <div className="flex items-center justify-center gap-2">
                         <button
-                          onClick={() => handleEdit(type)}
+                          onClick={() => handleEdit(category)}
                           className="p-2 text-cyan-700 hover:bg-blue-50 rounded-lg transition"
                           title="ویرایش"
                         >
                           <FaEdit />
                         </button>
                         <button
-                          onClick={() => handleDelete(type.id)}
+                          onClick={() => handleDelete(category.id)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
                           title="حذف"
                         >
@@ -223,11 +231,11 @@ const TypeManager = () => {
         )}
       </div>
 
-      {/* Modal Form */}
+      {/* Modal Form for Create/Edit */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={resetForm}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            {/* Modal Header */}
+            {/* Modal Header Gradient */}
             <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -235,7 +243,7 @@ const TypeManager = () => {
                     {editingId ? <FaEdit /> : <FaCheck />}
                   </div>
                   <h2 className="text-xl font-bold">
-                    {editingId ? "ویرایش نوع" : "نوع جدید"}
+                    {editingId ? "ویرایش دسته‌بندی" : "دسته‌بندی جدید"}
                   </h2>
                 </div>
                 <button onClick={resetForm} className="text-white/80 hover:text-white text-2xl leading-none">
@@ -249,7 +257,33 @@ const TypeManager = () => {
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    <span className="text-red-500">*</span> نام
+                    <span className="text-red-500">*</span> نوع (Type)
+                  </label>
+                  {loading.types ? (
+                    <div className="flex items-center gap-2 text-gray-500">
+                      <FaSpinner className="animate-spin" />
+                      بارگذاری انواع...
+                    </div>
+                  ) : (
+                    <select
+                      name="type"
+                      value={formData.type}
+                      onChange={handleInputChange}
+                      required
+                      className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
+                    >
+                      <option value="">انتخاب نوع</option>
+                      {types.map((type) => (
+                        <option key={type.id} value={type.id}>
+                          {type.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <span className="text-red-500">*</span> نام دسته‌بندی
                   </label>
                   <input
                     type="text"
@@ -258,24 +292,8 @@ const TypeManager = () => {
                     onChange={handleInputChange}
                     required
                     className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
-                    placeholder="مثال: الکترونیک"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    دسته‌بندی‌ها (با کاما جدا کنید)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.categories.join("، ")}
-                    onChange={handleCategoriesChange}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
-                    placeholder="لپ‌تاپ، موبایل، تبلت"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">نام دسته‌ها را با کامای فارسی (،) یا انگلیسی (,) وارد کنید</p>
-                </div>
-
                 <div className="flex justify-end gap-3 pt-4">
                   <button
                     type="button"
@@ -286,10 +304,10 @@ const TypeManager = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading.submit || loading.types}
                     className="px-5 py-2 bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white rounded-lg shadow-md transition disabled:opacity-50 flex items-center gap-2"
                   >
-                    {loading ? (
+                    {loading.submit ? (
                       <>
                         <FaSpinner className="animate-spin" />
                         در حال ذخیره...
@@ -311,4 +329,4 @@ const TypeManager = () => {
   );
 };
 
-export default TypeManager;
+export default CategoryManager;

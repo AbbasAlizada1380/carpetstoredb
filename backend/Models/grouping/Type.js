@@ -9,9 +9,22 @@ const Type = sequelize.define(
       allowNull: false,
     },
     categories: {
-      type: DataTypes.JSON, // 👈 آرایه اینجا ذخیره می‌شود
+      type: DataTypes.JSON,
       allowNull: false,
       defaultValue: [],
+    },
+    // New fields for storing arrays of related ID references
+    EIncome: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      comment: "Array of IDs for expense-related income",
+    },
+    SIncome: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      comment: "Array of IDs for sales income",
     },
   },
   {
