@@ -65,7 +65,7 @@ app.use("/users", userRout);
 app.use("/income", incomeRoute);
 app.use("/sells", sellsRouter);
 // app.use("/stock/exist", ExistRoute);
-// app.use("/customers", CustomerRoute);
+app.use("/customer", CustomerRoute);
 app.use("/type", TypeRouter);
 app.use("/category", CategoryRouter);
 

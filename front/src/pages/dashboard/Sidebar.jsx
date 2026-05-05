@@ -161,7 +161,7 @@ const Sidebar = ({ setActiveComponent }) => {
           <img src="/logo.png" alt="Logo" className="h-8 w-8 rounded-full" />
         </div>
         <span className="text-lg font-semibold text-white whitespace-nowrap">
-          غرب سی تی پی
+          فرش گیسو
         </span>
       </header>
 

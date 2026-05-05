@@ -1,3 +1,4 @@
+import Customer from "../../Models/Customers.js";
 import { Income } from "../../Models/index.js"; // adjust import path as needed
 
 // Helper: Calculate length from area and width
@@ -9,7 +10,7 @@ const calculateLength = (area, width) => {
 // ========== CREATE ==========
 export const createIncome = async (req, res) => {
   try {
-    let { width, color, degree, lotNumber, area } = req.body;
+    let { width, color, degree, lotNumber, area, customerId, newCustomer } = req.body;
 
     // Validation
     if (!width || width <= 0) {
@@ -20,6 +21,9 @@ export const createIncome = async (req, res) => {
     }
     if (!color) return res.status(400).json({ message: "Color is required" });
     if (!lotNumber) return res.status(400).json({ message: "Lot number is required" });
+    if (!customerId && !newCustomer) {
+      return res.status(400).json({ message: "Either customerId or newCustomer is required" });
+    }
 
     // Check unique lotNumber
     const existing = await Income.findOne({ where: { lotNumber } });
@@ -33,6 +37,23 @@ export const createIncome = async (req, res) => {
       return res.status(400).json({ message: "Could not calculate length from area and width" });
     }
 
+    // Determine customer ID
+    let finalCustomerId = null;
+    if (customerId) {
+      const customer = await Customer.findByPk(customerId);
+      if (!customer) {
+        return res.status(400).json({ message: "Provided customerId does not exist" });
+      }
+      finalCustomerId = customer.id;
+    } else if (newCustomer) {
+      // Create a new inactive customer
+      const newCust = await Customer.create({
+        fullname: newCustomer.trim(),
+        isActive: false,
+      });
+      finalCustomerId = newCust.id;
+    }
+
     const newIncome = await Income.create({
       width,
       color,
@@ -40,6 +61,7 @@ export const createIncome = async (req, res) => {
       lotNumber,
       area,
       length,
+      customerId: finalCustomerId,
     });
 
     res.status(201).json(newIncome);
@@ -48,13 +70,24 @@ export const createIncome = async (req, res) => {
   }
 };
 
-// ========== READ ALL ==========
 export const getAllIncomes = async (req, res) => {
   try {
-    const incomes = await Income.findAll({
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const { count, rows } = await Income.findAndCountAll({
       order: [["createdAt", "DESC"]],
+      limit,
+      offset,
     });
-    res.status(200).json(incomes);
+
+    res.status(200).json({
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      items: rows,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
