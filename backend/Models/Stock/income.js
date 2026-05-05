@@ -27,7 +27,10 @@ const Income = sequelize.define(
     customerId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      comment: "Batch or lot number for inventory tracking",
+    },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
     },
     area: {
       type: DataTypes.DECIMAL(10, 2),

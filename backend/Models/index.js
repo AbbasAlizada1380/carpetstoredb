@@ -9,13 +9,11 @@ import Income from "./Stock/income.js";
 Type.hasMany(Category, { foreignKey: "typeId", as: "categoryList" });
 Category.belongsTo(Type, { foreignKey: "typeId", as: "type" });
 
-// Category ↔ Sells (a Category has many Sells, a Sell belongs to one Category)
+// Category ↔ Sells
 Category.hasMany(Sells, { foreignKey: "Category", as: "sells" });
 Sells.belongsTo(Category, { foreignKey: "Category", as: "categoryDetail" });
 
-// ------------------------------------------
 
-// Export models and sequelize instance
 export {
   sequelize,
   Category,

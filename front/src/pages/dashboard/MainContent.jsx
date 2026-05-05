@@ -1,7 +1,7 @@
 import Dashboard from "./pages/dashboard";
 import Report from "./pages/reports";
 import AddUser from "./pages/AddUser";
-import Stock from "./pages/Stock";
+import Stock from "./pages/stock/Stock.jsx";
 import ExpenseManager from "./pages/expense/ExpenseManages";
 import StaffManager from "./pages/StaffManager";
 import SalaryManagement from "./pages/SalaryManagement";
@@ -9,7 +9,7 @@ import TakingMoneyManager from "./pages/TakingMoneyManager";
 import CompanyStock from "./pages/CompanyStock";
 import TypeManager from "./pages/grouping/TypeManager";
 import CategoryManager from "./pages/grouping/CategoryManager";
-import SellManager from "./pages/stock/SellsManager.jsx";
+import SellManager from "./pages/Sales/SellsManager.jsx";
 import IncomeManager from "./pages/stock/IncomeManager.jsx";
 const MainContent = ({ activeComponent }) => {
   const renderContent = () => {
@@ -33,7 +33,7 @@ const MainContent = ({ activeComponent }) => {
       case "StaffManager":
         return <StaffManager />;
       case "Stock":
-        return <IncomeManager />;
+        return <Stock />;
       case "ExpenseManager":
         return <ExpenseManager />;
       case "sells":

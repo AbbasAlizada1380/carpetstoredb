@@ -1,7 +1,7 @@
 import { useState } from "react";
-import Incoming from "./Incoming";
-import Outgoing from "./Outgoing";
-import ExistingStock from "./ExistingStock";
+import Outgoing from "../Outgoing";
+import ExistingStock from "../ExistingStock";
+import IncomeManager from "./IncomeManager";
 
 const Stock = () => {
   const [activeTab, setActiveTab] = useState("incoming");
@@ -105,7 +105,7 @@ const Stock = () => {
               <div className="transition-all duration-500 ease-in-out">
                 {activeTab === "incoming" && (
                   <div className="animate-fadeIn">
-                    <Incoming />
+                    <IncomeManager />
                   </div>
                 )}
                 {activeTab === "outgoing" && (

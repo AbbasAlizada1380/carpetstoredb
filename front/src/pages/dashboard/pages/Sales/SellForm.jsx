@@ -3,82 +3,66 @@ import axios from "axios";
 import { FaSpinner, FaSave, FaTimes, FaMinusCircle, FaPlusCircle } from "react-icons/fa";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
-const API_BASE_URL = `${BASE_URL}/income`;
+const SELLS_API_URL = `${BASE_URL}/sells`;
 const CUSTOMER_API = `${BASE_URL}/customer`;
-const TYPE_API = `${BASE_URL}/type`;
+const CATEGORY_API = `${BASE_URL}/category`;
 
-const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  // Each entry: typeId, categoryId, width, color, degree, lotNumber, area, length
+const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
+  // Each entry: categoryId, amount, unit_price, receipt, remaind (calculated)
   const [entries, setEntries] = useState(
-    initialEntries || [{ typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]
+    initialEntries || [{ categoryId: "", amount: "", unit_price: "", receipt: "", remaind: "" }]
   );
   const [customers, setCustomers] = useState([]);
   const [customerMode, setCustomerMode] = useState("existing");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
-  const [types, setTypes] = useState([]);
-  const [categoriesMap, setCategoriesMap] = useState({}); // { typeId: [categories] }
+  const [categories, setCategories] = useState([]);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     fetchCustomers();
-    fetchTypes();
+    fetchCategories();
   }, []);
 
   const fetchCustomers = async () => {
     try {
       const res = await axios.get(CUSTOMER_API);
-      setCustomers(res.data.customers);
+      setCustomers(res.data.customers || []);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const fetchTypes = async () => {
+  const fetchCategories = async () => {
     try {
-      const res = await axios.get(TYPE_API);
-      setTypes(res.data);
+      const res = await axios.get(CATEGORY_API);
+      // Assuming API returns array of categories with id, name
+      setCategories(res.data.items || res.data);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const fetchCategoriesForType = async (typeId) => {
-    if (!typeId) return;
-    if (categoriesMap[typeId]) return; // already loaded
-    try {
-      const res = await axios.get(`${TYPE_API}/${typeId}/categories`);
-      setCategoriesMap(prev => ({ ...prev, [typeId]: res.data }));
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const calculateLength = (width, area) => {
-    if (width && area && parseFloat(width) > 0) {
-      return (parseFloat(area) / parseFloat(width)).toFixed(2);
-    }
-    return "";
+  const calculateRemaind = (amount, unit_price, receipt) => {
+    const total = (parseFloat(amount) || 0) * (parseFloat(unit_price) || 0);
+    const paid = parseFloat(receipt) || 0;
+    return total - paid;
   };
 
   const handleEntryChange = (index, field, value) => {
     const newEntries = [...entries];
     newEntries[index][field] = value;
-
-    if (field === "typeId") {
-      // Reset category when type changes
-      newEntries[index].categoryId = "";
-      fetchCategoriesForType(value);
-    }
-    if (field === "width" || field === "area") {
-      newEntries[index].length = calculateLength(newEntries[index].width, newEntries[index].area);
+    // Recalculate remaind when amount, unit_price, or receipt change
+    if (field === "amount" || field === "unit_price" || field === "receipt") {
+      const remaind = calculateRemaind(newEntries[index].amount, newEntries[index].unit_price, newEntries[index].receipt);
+      newEntries[index].remaind = remaind.toFixed(2);
     }
     setEntries(newEntries);
   };
 
   const addEntry = () => {
-    setEntries([...entries, { typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]);
+    setEntries([...entries, { categoryId: "", amount: "", unit_price: "", receipt: "", remaind: "" }]);
   };
 
   const removeEntry = (index) => {
@@ -90,12 +74,9 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   };
 
   const validateEntry = (entry) => {
-    if (!entry.typeId) return "نوع باید انتخاب شود";
     if (!entry.categoryId) return "دسته‌بندی باید انتخاب شود";
-    if (!entry.width || parseFloat(entry.width) <= 0) return "عرض باید بزرگتر از صفر باشد";
-    if (!entry.area || parseFloat(entry.area) <= 0) return "مساحت باید بزرگتر از صفر باشد";
-    if (!entry.color.trim()) return "رنگ الزامی است";
-    if (!entry.lotNumber.trim()) return "شماره لات الزامی است";
+    if (!entry.amount || parseFloat(entry.amount) <= 0) return "مقدار باید بزرگتر از صفر باشد";
+    if (!entry.unit_price || parseFloat(entry.unit_price) <= 0) return "قیمت واحد باید بزرگتر از صفر باشد";
     return null;
   };
 
@@ -131,26 +112,26 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     setError("");
     try {
       const payloads = entries.map(entry => ({
-        typeId: entry.typeId,
-        categoryId: entry.categoryId,
-        width: parseFloat(entry.width),
-        color: entry.color.trim(),
-        degree: entry.degree.trim() || null,
-        lotNumber: entry.lotNumber.trim(),
-        area: parseFloat(entry.area),
+        Category: entry.categoryId,
+        amount: parseFloat(entry.amount),
+        unit_price: parseFloat(entry.unit_price),
+        receipt: parseFloat(entry.receipt) || 0,
+        // remaind is auto-calculated on backend, but we can send it too
         ...customerPayload,
       }));
 
       if (editingId) {
-        await axios.put(`${API_BASE_URL}/${editingId}`, payloads[0]);
+        // Edit mode – only one entry expected
+        await axios.put(`${SELLS_API_URL}/${editingId}`, payloads[0]);
       } else {
         for (const payload of payloads) {
-          await axios.post(API_BASE_URL, payload);
+          await axios.post(SELLS_API_URL, payload);
         }
       }
       onSuccess();
       if (!editingId) {
-        setEntries([{ typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]);
+        // Reset form
+        setEntries([{ categoryId: "", amount: "", unit_price: "", receipt: "", remaind: "" }]);
         setCustomerMode("existing");
         setSelectedCustomerId("");
         setNewCustomerName("");
@@ -158,7 +139,9 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         onCancel();
       }
     } catch (err) {
-      setError(err.response?.data?.message || (editingId ? "ویرایش ناکام ماند" : "ایجاد ناکام ماند"));
+      const msg = err.response?.data?.message || (editingId ? "ویرایش ناکام ماند" : "ایجاد ناکام ماند");
+      setError(msg);
+      console.error(err);
     } finally {
       setSubmitLoading(false);
     }
@@ -168,7 +151,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     <div className="bg-white rounded-xl shadow-lg border border-gray-100 p-6 mb-6">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-xl font-bold text-gray-800">
-          {editingId ? "ویرایش رکورد" : "ثبت رکورد جدید (چند ردیف)"}
+          {editingId ? "ویرایش فروش" : "ثبت فروش جدید (چند ردیف)"}
         </h3>
         {onCancel && (
           <button onClick={onCancel} className="text-gray-500 hover:text-gray-700">
@@ -199,7 +182,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         {customerMode === "existing" ? (
           <select value={selectedCustomerId} onChange={(e) => setSelectedCustomerId(e.target.value)} className="w-full border rounded-lg px-4 py-2" required>
             <option value="">انتخاب مشتری</option>
-            {Array.isArray(customers) && customers.map(cust => (
+            {customers.map(cust => (
               <option key={cust.id} value={cust.id}>{cust.fullname}</option>
             ))}
           </select>
@@ -214,14 +197,11 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
             <thead className="bg-gray-100">
               <tr>
                 <th className="p-2 border">#</th>
-                <th className="p-2 border">نوع*</th>
                 <th className="p-2 border">دسته‌بندی*</th>
-                <th className="p-2 border">عرض (متر)*</th>
-                <th className="p-2 border">مساحت (م²)*</th>
-                <th className="p-2 border">طول (محاسبه)</th>
-                <th className="p-2 border">رنگ*</th>
-                <th className="p-2 border">درجه</th>
-                <th className="p-2 border">شماره لات*</th>
+                <th className="p-2 border">مقدار*</th>
+                <th className="p-2 border">قیمت واحد*</th>
+                <th className="p-2 border">دریافتی</th>
+                <th className="p-2 border">باقیمانده (محاسبه)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
             </thead>
@@ -231,43 +211,27 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                   <td className="p-2 text-center">{idx + 1}</td>
                   <td className="p-2">
                     <select
-                      value={entry.typeId}
-                      onChange={(e) => handleEntryChange(idx, "typeId", e.target.value)}
-                      className="w-28 border rounded px-1 py-1"
-                      required
-                    >
-                      <option value="">انتخاب نوع</option>
-                      {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </td>
-                  <td className="p-2">
-                    <select
                       value={entry.categoryId}
                       onChange={(e) => handleEntryChange(idx, "categoryId", e.target.value)}
-                      className="w-28 border rounded px-1 py-1"
-                      disabled={!entry.typeId}
+                      className="w-32 border rounded px-1 py-1"
                       required
                     >
                       <option value="">انتخاب دسته</option>
-                      {categoriesMap[entry.typeId]?.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                      {categories.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
                     </select>
                   </td>
                   <td className="p-2">
-                    <input type="number" step="any" value={entry.width} onChange={(e) => handleEntryChange(idx, "width", e.target.value)} className="w-20 border rounded px-1 py-1" required />
+                    <input type="number" step="any" value={entry.amount} onChange={(e) => handleEntryChange(idx, "amount", e.target.value)} className="w-20 border rounded px-1 py-1" required />
                   </td>
                   <td className="p-2">
-                    <input type="number" step="any" value={entry.area} onChange={(e) => handleEntryChange(idx, "area", e.target.value)} className="w-20 border rounded px-1 py-1" required />
-                  </td>
-                  <td className="p-2 text-gray-600">{entry.length || "—"}</td>
-                  <td className="p-2">
-                    <input type="text" value={entry.color} onChange={(e) => handleEntryChange(idx, "color", e.target.value)} className="w-24 border rounded px-1 py-1" required />
+                    <input type="number" step="any" value={entry.unit_price} onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)} className="w-24 border rounded px-1 py-1" required />
                   </td>
                   <td className="p-2">
-                    <input type="text" value={entry.degree} onChange={(e) => handleEntryChange(idx, "degree", e.target.value)} className="w-20 border rounded px-1 py-1" />
+                    <input type="number" step="any" value={entry.receipt} onChange={(e) => handleEntryChange(idx, "receipt", e.target.value)} className="w-24 border rounded px-1 py-1" />
                   </td>
-                  <td className="p-2">
-                    <input type="text" value={entry.lotNumber} onChange={(e) => handleEntryChange(idx, "lotNumber", e.target.value)} className="w-32 border rounded px-1 py-1" required />
-                  </td>
+                  <td className="p-2 text-gray-600">{entry.remaind ? parseFloat(entry.remaind).toFixed(2) : "—"}</td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
                       <FaMinusCircle />
@@ -285,14 +249,14 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           </button>
           <div className="flex gap-3">
             {onCancel && <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">انصراف</button>}
-            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-indigo-800 text-white rounded-lg shadow-md flex items-center gap-2">
+            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-green-800 text-white rounded-lg shadow-md flex items-center gap-2">
               {submitLoading ? <><FaSpinner className="animate-spin" />در حال ذخیره...</> : <><FaSave />{editingId ? "به‌روزرسانی" : "ذخیره همه"}</>}
             </button>
           </div>
         </div>
         {!editingId && (
           <p className="text-xs text-gray-400 mt-3">
-            توجه: هر ردیف شامل نوع و دسته‌بندی مربوطه است. عرض و مساحت برای محاسبه طول استفاده می‌شود.
+            توجه: هر ردیف به صورت جداگانه در دیتابیس ثبت می‌شود. مشتری برای همه ردیف‌ها یکسان است.
           </p>
         )}
       </form>
@@ -300,4 +264,4 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   );
 };
 
-export default IncomeForm;
+export default SellForm;
