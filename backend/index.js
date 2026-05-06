@@ -14,6 +14,7 @@ import TypeRouter from "./routes/grouping/TypeRouter.js";
 import CategoryRouter from "./routes/grouping/CategoryRouter.js";
 import sellsRouter from "./routes/Stock/OutgoingRoute.js";
 import incomeRoute from "./routes/Stock/StockIncomeRoute.js";
+import ExpenseRoute from "./routes/ExpenseRoute.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -60,6 +61,7 @@ app.use("/uploads", express.static(uploadsDirectory));
 
 // Routes
 app.use("/users", userRout);
+app.use("/expense", ExpenseRoute);
 // app.use("/orderItems", OrderItemRoute);
 // app.use("/report", ReportRouter);
 app.use("/income", incomeRoute);

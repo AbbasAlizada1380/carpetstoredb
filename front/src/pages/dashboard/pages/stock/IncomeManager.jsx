@@ -110,7 +110,7 @@ const IncomeManager = () => {
               setEditingIncome(null);
               setShowForm(true);
             }}
-            className="px-6 py-3 bg-gradient-to-r from-indigo-800 to-indigo-600 text-white rounded-xl hover:from-indigo-900 hover:to-indigo-700 transition font-medium shadow-md flex items-center gap-2"
+            className="px-6 py-3 bg-primary text-white rounded-xl hover:from-indigo-900 hover:to-indigo-700 transition font-medium shadow-md flex items-center gap-2"
           >
             <FaPlus />
             افزودن رکورد جدید
@@ -118,7 +118,7 @@ const IncomeManager = () => {
         ) : (
           <button
             onClick={handleFormCancel}
-            className="px-6 py-3 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition font-medium shadow-md flex items-center gap-2"
+            className="px-6 py-3 bg-primary text-white rounded-xl transition font-medium shadow-md flex items-center gap-2"
           >
             <FaTimes />
             بستن فرم
@@ -147,7 +147,7 @@ const IncomeManager = () => {
 
       {/* Income Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-800 to-indigo-600 text-white p-4">
+        <div className="bg-primary text-white p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-full">

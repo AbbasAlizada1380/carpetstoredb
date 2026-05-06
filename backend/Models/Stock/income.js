@@ -21,7 +21,7 @@ const Income = sequelize.define(
     lotNumber: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true,
+      unique: false,
       comment: "Batch or lot number for inventory tracking",
     },
     customerId: {

@@ -5,7 +5,7 @@ import Category from "../grouping/Category.js";
 const Sells = sequelize.define(
   "Sells",
   {
-    Category: {
+    categoryId: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: { model: "Categories", key: "id" }, // assumes a Type table exists
@@ -36,10 +36,15 @@ const Sells = sequelize.define(
       defaultValue: 0,
       comment: "Total amount = unit_price × amount",
     },
-    customer: {
-      type: DataTypes.STRING,
+    buyerId: {
+      type: DataTypes.INTEGER,
       allowNull: false,
     },
+    incomeId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: { model: "Incomes", key: "id" },
+    }
   },
   {
     timestamps: true,

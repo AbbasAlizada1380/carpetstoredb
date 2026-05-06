@@ -285,7 +285,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           </button>
           <div className="flex gap-3">
             {onCancel && <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">انصراف</button>}
-            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-indigo-800 text-white rounded-lg shadow-md flex items-center gap-2">
+            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-primary text-white rounded-lg shadow-md flex items-center gap-2">
               {submitLoading ? <><FaSpinner className="animate-spin" />در حال ذخیره...</> : <><FaSave />{editingId ? "به‌روزرسانی" : "ذخیره همه"}</>}
             </button>
           </div>

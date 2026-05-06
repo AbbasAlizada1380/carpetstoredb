@@ -1,4 +1,4 @@
-import { Category, Type } from "../../Models/index.js";
+import { Category, Type,Income } from "../../Models/index.js";
 
 // Helper: Sync the categories JSON array of a Type based on its related Category records
 const syncTypeCategories = async (typeId) => {
@@ -136,6 +136,37 @@ export const deleteCategory = async (req, res) => {
     }
 
     res.status(200).json({ message: "Category deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Add to your category controller file
+
+// ========== GET INCOMES BY CATEGORY ID ==========
+export const getIncomesByCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const category = await Category.findByPk(id);
+    if (!category) {
+      return res.status(404).json({ message: "Category not found" });
+    }
+
+    // Parse EIncome array (it's stored as JSON in DB)
+    let incomeIds = category.EIncome;
+    if (typeof incomeIds === 'string') incomeIds = JSON.parse(incomeIds);
+    if (!Array.isArray(incomeIds) || incomeIds.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    // Fetch Income records
+    const incomes = await Income.findAll({
+      where: { id: incomeIds },
+      order: [["createdAt", "DESC"]],
+    });
+
+    res.status(200).json(incomes);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

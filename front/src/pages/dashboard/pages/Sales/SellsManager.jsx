@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
 import SellForm from "./SellForm";
+import Pagination from "../../pagination/Pagination"; // imported your pagination component
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/sells`;
@@ -13,15 +14,25 @@ const SellManager = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetchSells();
-  }, []);
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
 
-  const fetchSells = async () => {
+  // Fetch sells with pagination
+  const fetchSells = async (page = currentPage, limit = itemsPerPage) => {
     setLoading(true);
     try {
-      const response = await axios.get(API_BASE_URL);
-      setSells(response.data);
+      const response = await axios.get(API_BASE_URL, {
+        params: { page, limit },
+      });
+      // Assuming backend returns: { data: [...], totalPages, currentPage, totalItems }
+      const { data, totalPages: totalPagesRes, currentPage: currentPageRes, totalItems: totalItemsRes } = response.data;
+      setSells(data);
+      setTotalPages(totalPagesRes);
+      setCurrentPage(currentPageRes);
+      setTotalItems(totalItemsRes);
       setError("");
     } catch (err) {
       setError("بارگیری فروش‌ها ناکام ماند");
@@ -31,13 +42,20 @@ const SellManager = () => {
     }
   };
 
+  // Re-fetch when page or itemsPerPage changes
+  useEffect(() => {
+    fetchSells(currentPage, itemsPerPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, itemsPerPage]);
+
   const handleEdit = (sell) => {
     setEditingSell(sell);
     setShowForm(true);
   };
 
   const handleFormSuccess = () => {
-    fetchSells();
+    // After successful add/edit, refetch current page
+    fetchSells(currentPage, itemsPerPage);
     setShowForm(false);
     setEditingSell(null);
   };
@@ -52,7 +70,12 @@ const SellManager = () => {
     setLoading(true);
     try {
       await axios.delete(`${API_BASE_URL}/${id}`);
-      fetchSells();
+      // After delete, if current page has only one item and it's not first page, go to previous page
+      if (sells.length === 1 && currentPage > 1) {
+        setCurrentPage(currentPage - 1);
+      } else {
+        fetchSells(currentPage, itemsPerPage);
+      }
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
       console.error(err);
@@ -60,6 +83,13 @@ const SellManager = () => {
       setLoading(false);
     }
   };
+
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
+
 
   const getInitialEntries = () => {
     if (editingSell) {
@@ -89,7 +119,7 @@ const SellManager = () => {
               setEditingSell(null);
               setShowForm(true);
             }}
-            className="px-6 py-3 bg-gradient-to-r from-green-800 to-green-600 text-white rounded-xl hover:from-green-900 hover:to-green-700 transition font-medium shadow-md flex items-center gap-2"
+            className="px-6 py-3 bg-primary text-white rounded-xl   transition font-medium shadow-md flex items-center gap-2"
           >
             <FaPlus />
             افزودن فروش جدید
@@ -127,8 +157,8 @@ const SellManager = () => {
 
       {/* Sells Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-        <div className="bg-gradient-to-r from-green-800 to-green-600 text-white p-4">
-          <div className="flex items-center justify-between">
+        <div className="bg-primary text-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-full">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -140,18 +170,20 @@ const SellManager = () => {
                 <p className="text-sm text-white/80">مدیریت تمام فاکتورهای فروش ثبت شده</p>
               </div>
             </div>
-            {loading && (
-              <div className="flex items-center gap-2 text-sm bg-white/20 px-3 py-1 rounded-full">
-                <FaSpinner className="animate-spin" />
-                در حال بارگذاری...
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {loading && (
+                <div className="flex items-center gap-2 text-sm bg-white/20 px-3 py-1 rounded-full">
+                  <FaSpinner className="animate-spin" />
+                  در حال بارگذاری...
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {loading && sells.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
-            <FaSpinner className="text-4xl text-green-800 animate-spin mb-4" />
+            <FaSpinner className="text-4xl text-primary animate-spin mb-4" />
             <p className="text-gray-600">در حال بارگذاری فروش‌ها...</p>
           </div>
         ) : sells.length === 0 ? (
@@ -165,60 +197,72 @@ const SellManager = () => {
             </div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-center">
-              <thead className="bg-green-50 text-green-800">
-                <tr>
-                  <th className="p-3 border-b font-semibold">شناسه</th>
-                  <th className="p-3 border-b font-semibold">دسته‌بندی</th>
-                  <th className="p-3 border-b font-semibold">مشتری</th>
-                  <th className="p-3 border-b font-semibold">مقدار</th>
-                  <th className="p-3 border-b font-semibold">قیمت واحد</th>
-                  <th className="p-3 border-b font-semibold">جمع</th>
-                  <th className="p-3 border-b font-semibold">دریافتی</th>
-                  <th className="p-3 border-b font-semibold">باقیمانده</th>
-                  <th className="p-3 border-b font-semibold">عملیات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sells.map((sell) => (
-                  <tr key={sell.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                    <td className="p-3 text-gray-600">{sell.id}</td>
-                    <td className="p-3 font-medium text-gray-800">
-                      {sell.categoryDetail?.name || "—"}
-                      {sell.categoryDetail?.type && (
-                        <span className="text-xs text-gray-500 block">({sell.categoryDetail.type.name})</span>
-                      )}
-                    </td>
-                    <td className="p-3 font-medium text-gray-800">{sell.customerDetail?.fullname || "—"}</td>
-                    <td className="p-3">{sell.amount}</td>
-                    <td className="p-3">{new Intl.NumberFormat().format(sell.unit_price)}</td>
-                    <td className="p-3">{new Intl.NumberFormat().format(sell.total)}</td>
-                    <td className="p-3">{new Intl.NumberFormat().format(sell.receipt)}</td>
-                    <td className="p-3">{new Intl.NumberFormat().format(sell.remaind)}</td>
-                    <td className="p-3">
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => handleEdit(sell)}
-                          className="p-2 text-green-700 hover:bg-green-50 rounded-lg transition"
-                          title="ویرایش"
-                        >
-                          <FaEdit />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(sell.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
-                          title="حذف"
-                        >
-                          <FaTrash />
-                        </button>
-                      </div>
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-center">
+                <thead className="bg-blue-50 text-primary">
+                  <tr>
+                    <th className="p-3 border-b font-semibold">شناسه</th>
+                    <th className="p-3 border-b font-semibold">دسته‌بندی</th>
+                    <th className="p-3 border-b font-semibold">مشتری</th>
+                    <th className="p-3 border-b font-semibold">مقدار</th>
+                    <th className="p-3 border-b font-semibold">قیمت واحد</th>
+                    <th className="p-3 border-b font-semibold">جمع</th>
+                    <th className="p-3 border-b font-semibold">دریافتی</th>
+                    <th className="p-3 border-b font-semibold">باقیمانده</th>
+                    <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {sells.map((sell) => (
+                    <tr key={sell.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                      <td className="p-3 text-gray-600">{sell.id}</td>
+                      <td className="p-3 font-medium text-gray-800">
+                        {sell.categoryDetail?.name || "—"}
+                        {sell.categoryDetail?.type && (
+                          <span className="text-xs text-gray-500 block">({sell.categoryDetail.type.name})</span>
+                        )}
+                      </td>
+                      <td className="p-3 font-medium text-gray-800">{sell.customerDetail?.fullname || "—"}</td>
+                      <td className="p-3">{sell.amount}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(sell.unit_price)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(sell.total)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(sell.receipt)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(sell.remaind)}</td>
+                      <td className="p-3">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleEdit(sell)}
+                            className="p-2 text-primary hover:bg-blue-50 rounded-lg transition"
+                            title="ویرایش"
+                          >
+                            <FaEdit />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(sell.id)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                            title="حذف"
+                          >
+                            <FaTrash />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* Pagination Component */}
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+            />
+            {/* Optional: show total items count */}
+            <div className="text-center text-gray-500 text-sm py-2">
+              مجموع {totalItems} فروش | صفحه {currentPage} از {totalPages}
+            </div>
+          </>
         )}
       </div>
     </div>
