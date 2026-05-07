@@ -1,5 +1,6 @@
-import { Sells, Category, Type, Buyer, Income } from "../../Models/index.js";
+import { Sells, Category, Type, Buyer, Income, BuyerAccount, Receipt } from "../../Models/index.js";
 
+// Helper: sync SIncome for Type (unchanged)
 const syncSIncomeForType = async (typeId) => {
   if (!typeId) return;
   const categories = await Category.findAll({
@@ -12,7 +13,7 @@ const syncSIncomeForType = async (typeId) => {
     return;
   }
   const sells = await Sells.findAll({
-    where: { categoryId: categoryIds },   // changed from Category to categoryId
+    where: { categoryId: categoryIds },
     attributes: ['id'],
     order: [['id', 'ASC']],
   });
@@ -20,7 +21,7 @@ const syncSIncomeForType = async (typeId) => {
   await Type.update({ SIncome: sellIds }, { where: { id: typeId } });
 };
 
-// Helper: Get or create buyer (no duplicates)
+// Helper: Get or create buyer (unchanged)
 const getOrCreateBuyer = async (buyerId, newBuyerName) => {
   if (buyerId) {
     const buyer = await Buyer.findByPk(buyerId);
@@ -29,7 +30,6 @@ const getOrCreateBuyer = async (buyerId, newBuyerName) => {
   }
   if (newBuyerName && newBuyerName.trim()) {
     const trimmedName = newBuyerName.trim();
-    // ✅ Try to find existing buyer first
     let buyer = await Buyer.findOne({ where: { fullname: trimmedName } });
     if (!buyer) {
       buyer = await Buyer.create({
@@ -42,12 +42,55 @@ const getOrCreateBuyer = async (buyerId, newBuyerName) => {
   throw new Error("Either buyerId or newBuyer is required");
 };
 
-// ========== CREATE ==========
+// ========== NEW HELPER: Add sell to BuyerAccount ==========
+const addSellToBuyerAccount = async (buyerId, sellId, receiptAmount = 0) => {
+  let account = await BuyerAccount.findOne({ where: { buyerId } });
+  if (!account) {
+    account = await BuyerAccount.create({
+      buyerId,
+      sellIds: [],
+      remaindIds: [],
+      receiptIds: [],
+    });
+  }
+  // Add sell ID if not already present
+  if (!account.sellIds.includes(sellId)) {
+    const updatedSellIds = [...account.sellIds, sellId];
+    await account.update({ sellIds: updatedSellIds });
+  }
+  return account;
+};
+
+// ========== NEW HELPER: Create Receipt and link to BuyerAccount ==========
+const createReceiptAndLink = async (buyerId, amount, description = "") => {
+  if (!amount || amount <= 0) return null;
+  const receipt = await Receipt.create({
+    buyerId,
+    amountofmoney: amount,
+    description: description || `پرداخت برای فروش`,
+  });
+  // Add receipt ID to buyer account
+  let account = await BuyerAccount.findOne({ where: { buyerId } });
+  if (!account) {
+    account = await BuyerAccount.create({
+      buyerId,
+      sellIds: [],
+      remaindIds: [],
+      receiptIds: [],
+    });
+  }
+  if (!account.receiptIds.includes(receipt.id)) {
+    const updatedReceiptIds = [...account.receiptIds, receipt.id];
+    await account.update({ receiptIds: updatedReceiptIds });
+  }
+  return receipt;
+};
+
+
 export const createSell = async (req, res) => {
   try {
-    let { sells } = req.body; // Expect an array of sells
+    let { sells } = req.body;
 
-    // If the frontend sends a single object (not array), wrap it
     if (!Array.isArray(sells)) {
       sells = [req.body];
     }
@@ -56,14 +99,12 @@ export const createSell = async (req, res) => {
       return res.status(400).json({ message: "No sell records provided" });
     }
 
-    // Extract common buyer info from the first sell (they should all be the same)
     const { buyerId, newBuyer } = sells[0];
 
     if (!buyerId && !newBuyer) {
       return res.status(400).json({ message: "Either buyerId or newBuyer is required" });
     }
 
-    // Get or create buyer ONCE
     let finalBuyerId;
     try {
       finalBuyerId = await getOrCreateBuyer(buyerId, newBuyer);
@@ -74,10 +115,33 @@ export const createSell = async (req, res) => {
     const createdSells = [];
 
     for (const sellData of sells) {
-      let { categoryId, incomeId, amount, unit_price, receipt, remaind } = sellData;
+      let { categoryId, incomeId, length, area, amount, unit_price, receipt, remaind } = sellData;
 
-      if (!categoryId || !incomeId || !unit_price || !amount) {
-        return res.status(400).json({ message: "Missing required fields in one of the sell entries" });
+      // Validation
+      if (!categoryId || !incomeId || !length || !unit_price) {
+        return res.status(400).json({ message: "Missing required fields: categoryId, incomeId, length, unit_price" });
+      }
+
+      const lengthNum = parseFloat(length);
+      const unitPriceNum = parseFloat(unit_price);
+      const amountNum = parseFloat(amount);
+      const areaNum = parseFloat(area) || 0;
+
+      if (isNaN(lengthNum) || lengthNum <= 0) {
+        return res.status(400).json({ message: "Length must be a positive number" });
+      }
+      if (isNaN(unitPriceNum) || unitPriceNum <= 0) {
+        return res.status(400).json({ message: "Unit price must be a positive number" });
+      }
+      if (isNaN(amountNum) || amountNum <= 0) {
+        return res.status(400).json({ message: "Amount (total money) must be a positive number" });
+      }
+
+      const expectedAmount = lengthNum * unitPriceNum;
+      if (Math.abs(amountNum - expectedAmount) > 0.01) {
+        return res.status(400).json({
+          message: `Amount mismatch: computed ${expectedAmount}, received ${amountNum}`
+        });
       }
 
       const category = await Category.findByPk(categoryId, { include: [{ model: Type, as: "type" }] });
@@ -91,28 +155,54 @@ export const createSell = async (req, res) => {
         return res.status(400).json({ message: `Income ${incomeId} does not belong to category ${categoryId}` });
       }
 
-      const total = unit_price * amount;
-      receipt = receipt || 0;
-      remaind = remaind !== undefined ? remaind : total - receipt;
+      const availableLength = parseFloat(income.length);
+      if (availableLength < lengthNum) {
+        return res.status(400).json({
+          message: `Insufficient length! Available: ${availableLength}, Requested: ${lengthNum.toFixed(2)}`
+        });
+      }
 
+      // Update income: reduce length and recompute area
+      const newLength = availableLength - lengthNum;
+      const newArea = parseFloat(income.width) * newLength;
+      await income.update({ length: newLength, area: newArea });
+
+      receipt = receipt || 0;
+      const finalRemaind = remaind !== undefined ? parseFloat(remaind) : amountNum - receipt;
+
+      // Create Sells record
       const newSell = await Sells.create({
         categoryId,
         incomeId,
-        unit_price,
-        amount,
-        total,
+        unit_price: unitPriceNum,
+        area: areaNum,
+        length: lengthNum,
         receipt,
-        remaind,
+        remaind: finalRemaind,
+        total: amountNum,
         buyerId: finalBuyerId,
       });
 
       createdSells.push(newSell);
 
-      // Update Type.SIncome after each sell (or after loop to reduce DB calls)
+      // === NEW: Update BuyerAccount and Receipt for this sell ===
+      // 1. Add sell ID to BuyerAccount
+      await addSellToBuyerAccount(finalBuyerId, newSell.id, receipt);
+
+      // 2. If receipt > 0, create a Receipt record
+      if (receipt > 0) {
+        const receiptDescription = `پرداخت برای فروش #${newSell.id} (${lengthNum}m × ${unitPriceNum} = ${amountNum}؋)`;
+        await createReceiptAndLink(finalBuyerId, receipt, receiptDescription);
+      }
+
+      // 3. (Optional) Store remaind ID if you have a Remaind model – here we push to remaindIds array
+      //    For simplicity, we'll just record the remaind amount in a separate array (e.g., remaindIds stores remaind record IDs)
+      //    Since no Remaind model exists, we can store the remaind value as a JSON object or ignore.
+      //    You can extend later.
+
       await syncSIncomeForType(typeId);
     }
 
-    // Optionally fetch all created sells with associations
     const createdWithDetails = await Sells.findAll({
       where: { id: createdSells.map(s => s.id) },
       include: [
@@ -129,9 +219,6 @@ export const createSell = async (req, res) => {
   }
 };
 
-// ... rest of your existing functions (getAllSells, getSellById, updateSell, deleteSell) 
-// need similar adjustments to handle incomeId and ensure associations are correct.
-// ========== READ ALL ==========
 export const getAllSells = async (req, res) => {
   try {
     // Pagination parameters

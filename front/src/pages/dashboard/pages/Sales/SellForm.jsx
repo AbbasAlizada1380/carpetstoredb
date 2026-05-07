@@ -4,13 +4,24 @@ import { FaSpinner, FaSave, FaTimes, FaMinusCircle, FaPlusCircle } from "react-i
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const SELLS_API_URL = `${BASE_URL}/sells`;
-const BUYER_API = `${BASE_URL}/buyers`;
+const BUYER_API = `${BASE_URL}/buyer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
 const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  // Each entry: typeId, categoryId, incomeId, length, amount (calculated), unit_price, receipt, remaind
+  // Each entry: typeId, categoryId, incomeId, incomeWidth, length, area, total, unit_price, receipt, remaind
   const [entries, setEntries] = useState(
-    initialEntries || [{ typeId: "", categoryId: "", incomeId: "", length: "", amount: "", unit_price: "", receipt: "", remaind: "" }]
+    initialEntries || [{
+      typeId: "",
+      categoryId: "",
+      incomeId: "",
+      incomeWidth: "",
+      length: "",
+      area: "",
+      total: "",
+      unit_price: "",
+      receipt: "",
+      remaind: ""
+    }]
   );
   const [buyers, setBuyers] = useState([]);
   const [buyerMode, setBuyerMode] = useState("existing");
@@ -68,29 +79,20 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     }
   };
 
-  const calculateAmountAndRemaind = (entry, currentField = null) => {
-    let amount = entry.amount;
-    let remaind = entry.remaind;
-    // If we have width (from selected income) and length, compute area = width * length
-    const selectedIncome = entry.incomeId && incomesMap[entry.categoryId]
-      ? incomesMap[entry.categoryId].find(inc => inc.id === parseInt(entry.incomeId))
-      : null;
-    if (selectedIncome && entry.length && parseFloat(entry.length) > 0) {
-      const width = parseFloat(selectedIncome.width);
-      const length = parseFloat(entry.length);
-      if (!isNaN(width) && !isNaN(length) && width > 0) {
-        amount = width * length;
-      }
-    } else {
-      amount = parseFloat(entry.amount) || 0;
-    }
-
+  // Calculate area, total, and remaind
+  const calculateDerivedValues = (entry) => {
+    const length = parseFloat(entry.length) || 0;
+    const width = parseFloat(entry.incomeWidth) || 0;
+    const area = length * width;
     const unit_price = parseFloat(entry.unit_price) || 0;
-    const total = amount * unit_price;
+    const total = length * unit_price;   // still linear meter pricing
     const receipt = parseFloat(entry.receipt) || 0;
-    remaind = total - receipt;
-
-    return { amount: amount.toFixed(2), remaind: remaind.toFixed(2) };
+    const remaind = total - receipt;
+    return {
+      area: area.toFixed(2),
+      total: total.toFixed(2),
+      remaind: remaind.toFixed(2),
+    };
   };
 
   const handleEntryChange = (index, field, value) => {
@@ -100,28 +102,39 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (field === "typeId") {
       newEntries[index].categoryId = "";
       newEntries[index].incomeId = "";
+      newEntries[index].incomeWidth = "";
       newEntries[index].length = "";
-      newEntries[index].amount = "";
+      newEntries[index].area = "";
+      newEntries[index].total = "";
       newEntries[index].remaind = "";
       fetchCategoriesForType(value);
     }
     if (field === "categoryId") {
       newEntries[index].incomeId = "";
+      newEntries[index].incomeWidth = "";
       newEntries[index].length = "";
-      newEntries[index].amount = "";
+      newEntries[index].area = "";
+      newEntries[index].total = "";
       newEntries[index].remaind = "";
       fetchIncomesForCategory(value);
     }
     if (field === "incomeId") {
+      // Find the selected income and store its width
+      const selectedIncome = incomesMap[newEntries[index].categoryId]?.find(
+        inc => inc.id === parseInt(value)
+      );
+      newEntries[index].incomeWidth = selectedIncome ? selectedIncome.width : "";
       newEntries[index].length = "";
-      newEntries[index].amount = "";
+      newEntries[index].area = "";
+      newEntries[index].total = "";
       newEntries[index].remaind = "";
     }
 
-    // If length, unit_price, or receipt changes, recalculate amount and remaind
-    if (field === "length" || field === "unit_price" || field === "receipt") {
-      const { amount, remaind } = calculateAmountAndRemaind(newEntries[index]);
-      newEntries[index].amount = amount;
+    // Recalculate area, total, remaind when length, unit_price, receipt, or incomeWidth changes
+    if (field === "length" || field === "unit_price" || field === "receipt" || field === "incomeWidth") {
+      const { area, total, remaind } = calculateDerivedValues(newEntries[index]);
+      newEntries[index].area = area;
+      newEntries[index].total = total;
       newEntries[index].remaind = remaind;
     }
 
@@ -129,7 +142,18 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   };
 
   const addEntry = () => {
-    setEntries([...entries, { typeId: "", categoryId: "", incomeId: "", length: "", amount: "", unit_price: "", receipt: "", remaind: "" }]);
+    setEntries([...entries, {
+      typeId: "",
+      categoryId: "",
+      incomeId: "",
+      incomeWidth: "",
+      length: "",
+      area: "",
+      total: "",
+      unit_price: "",
+      receipt: "",
+      remaind: ""
+    }]);
   };
 
   const removeEntry = (index) => {
@@ -160,7 +184,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
     }
 
-    // Buyer part
     let buyerPayload = {};
     if (buyerMode === "existing") {
       if (!selectedBuyerId) {
@@ -180,19 +203,18 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     setError("");
     try {
       const payloads = entries.map(entry => {
-        // Recalculate final amounts to be safe
-        const selectedIncome = incomesMap[entry.categoryId]?.find(inc => inc.id === parseInt(entry.incomeId));
-        const width = selectedIncome ? parseFloat(selectedIncome.width) : 0;
         const length = parseFloat(entry.length);
-        const amount = width * length;
         const unit_price = parseFloat(entry.unit_price);
         const receipt = parseFloat(entry.receipt) || 0;
-        const total = amount * unit_price;
+        const total = length * unit_price;
         const remaind = total - receipt;
+        const area = parseFloat(entry.area) || 0;
         return {
           categoryId: entry.categoryId,
           incomeId: entry.incomeId,
-          amount: amount.toFixed(2),
+          length: length,
+          area: area,                    // ✅ area added
+          amount: total.toFixed(2),
           unit_price,
           receipt,
           remaind: remaind.toFixed(2),
@@ -208,7 +230,18 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
       onSuccess();
       if (!editingId) {
-        setEntries([{ typeId: "", categoryId: "", incomeId: "", length: "", amount: "", unit_price: "", receipt: "", remaind: "" }]);
+        setEntries([{
+          typeId: "",
+          categoryId: "",
+          incomeId: "",
+          incomeWidth: "",
+          length: "",
+          area: "",
+          total: "",
+          unit_price: "",
+          receipt: "",
+          remaind: ""
+        }]);
         setBuyerMode("existing");
         setSelectedBuyerId("");
         setNewBuyerName("");
@@ -238,13 +271,12 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       </div>
 
       {error && (
-        <div className="bg-primary border-r-4 border-red-500 text-red-700 p-3 rounded-lg mb-4">
+        <div className="bg-red-50 border-r-4 border-red-500 text-red-700 p-3 rounded-lg mb-4">
           {error}
         </div>
       )}
 
-      {/* Buyer selection (global) */}
-      <div className="mb-6 p-4 bg-primary rounded-lg">
+      <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <label className="block text-sm font-medium text-gray-700 mb-2">خریدار <span className="text-red-500">*</span></label>
         <div className="flex gap-4 mb-3">
           <label className="flex items-center gap-2">
@@ -269,7 +301,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       <form onSubmit={handleSubmit}>
         <div className="overflow-x-auto mb-4">
           <table className="w-full text-sm border-collapse">
-            <thead className="bg-primary">
+            <thead className="bg-gray-100">
               <tr>
                 <th className="p-2 border">#</th>
                 <th className="p-2 border">نوع*</th>
@@ -279,102 +311,98 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">طول (متر)*</th>
                 <th className="p-2 border">مساحت (محاسبه)</th>
                 <th className="p-2 border">قیمت واحد*</th>
+                <th className="p-2 border">مبلغ کل (محاسبه)</th>
                 <th className="p-2 border">دریافتی</th>
                 <th className="p-2 border">باقیمانده (محاسبه)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry, idx) => {
-                const selectedIncome = entry.categoryId && entry.incomeId && incomesMap[entry.categoryId]
-                  ? incomesMap[entry.categoryId].find(inc => inc.id === parseInt(entry.incomeId))
-                  : null;
-                const width = selectedIncome ? selectedIncome.width : "";
-                return (
-                  <tr key={idx} className="border-b">
-                    <td className="p-2 text-center">{idx + 1}</td>
-                    <td className="p-2">
-                      <select
-                        value={entry.typeId}
-                        onChange={(e) => handleEntryChange(idx, "typeId", e.target.value)}
-                        className="w-28 border rounded px-1 py-1"
-                        required
-                      >
-                        <option value="">انتخاب نوع</option>
-                        {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-                    </td>
-                    <td className="p-2">
-                      <select
-                        value={entry.categoryId}
-                        onChange={(e) => handleEntryChange(idx, "categoryId", e.target.value)}
-                        className="w-32 border rounded px-1 py-1"
-                        disabled={!entry.typeId}
-                        required
-                      >
-                        <option value="">انتخاب دسته</option>
-                        {categoriesMap[entry.typeId]?.map(cat => (
-                          <option key={cat.id} value={cat.id}>{cat.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="p-2">
-                      <select
-                        value={entry.incomeId}
-                        onChange={(e) => handleEntryChange(idx, "incomeId", e.target.value)}
-                        className="w-40 border rounded px-1 py-1"
-                        disabled={!entry.categoryId}
-                        required
-                      >
-                        <option value="">انتخاب درآمد</option>
-                        {incomesMap[entry.categoryId]?.map(inc => (
-                          <option key={inc.id} value={inc.id}>
-                            {inc.lotNumber} - {inc.width}x{inc.length} - {inc.color}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="p-2 text-center">{width || "—"}</td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="any"
-                        value={entry.length}
-                        onChange={(e) => handleEntryChange(idx, "length", e.target.value)}
-                        className="w-20 border rounded px-1 py-1"
-                        disabled={!entry.incomeId}
-                        required
-                      />
-                    </td>
-                    <td className="p-2 text-gray-600">{entry.amount || "—"}</td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="any"
-                        value={entry.unit_price}
-                        onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)}
-                        className="w-24 border rounded px-1 py-1"
-                        required
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        step="any"
-                        value={entry.receipt}
-                        onChange={(e) => handleEntryChange(idx, "receipt", e.target.value)}
-                        className="w-24 border rounded px-1 py-1"
-                      />
-                    </td>
-                    <td className="p-2 text-gray-600">{entry.remaind ? parseFloat(entry.remaind).toFixed(2) : "—"}</td>
-                    <td className="p-2 text-center">
-                      <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
-                        <FaMinusCircle />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {entries.map((entry, idx) => (
+                <tr key={idx} className="border-b">
+                  <td className="p-2 text-center">{idx + 1}</td>
+                  <td className="p-2">
+                    <select
+                      value={entry.typeId}
+                      onChange={(e) => handleEntryChange(idx, "typeId", e.target.value)}
+                      className="w-28 border rounded px-1 py-1"
+                      required
+                    >
+                      <option value="">انتخاب نوع</option>
+                      {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={entry.categoryId}
+                      onChange={(e) => handleEntryChange(idx, "categoryId", e.target.value)}
+                      className="w-32 border rounded px-1 py-1"
+                      disabled={!entry.typeId}
+                      required
+                    >
+                      <option value="">انتخاب دسته</option>
+                      {categoriesMap[entry.typeId]?.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2">
+                    <select
+                      value={entry.incomeId}
+                      onChange={(e) => handleEntryChange(idx, "incomeId", e.target.value)}
+                      className="w-40 border rounded px-1 py-1"
+                      disabled={!entry.categoryId}
+                      required
+                    >
+                      <option value="">انتخاب درآمد</option>
+                      {incomesMap[entry.categoryId]?.map(inc => (
+                        <option key={inc.id} value={inc.id}>
+                          {inc.lotNumber} - {inc.width}x{inc.length} - {inc.color}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="p-2 text-center">{entry.incomeWidth || "—"}</td>
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      value={entry.length}
+                      onChange={(e) => handleEntryChange(idx, "length", e.target.value)}
+                      className="w-20 border rounded px-1 py-1"
+                      disabled={!entry.incomeId}
+                      required
+                    />
+                  </td>
+                  <td className="p-2 text-gray-700 font-medium">{entry.area || "—"} m²</td>
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      value={entry.unit_price}
+                      onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)}
+                      className="w-24 border rounded px-1 py-1"
+                      required
+                    />
+                  </td>
+                  <td className="p-2 text-gray-700 font-medium">{entry.total || "—"} ؋</td>
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      value={entry.receipt}
+                      onChange={(e) => handleEntryChange(idx, "receipt", e.target.value)}
+                      className="w-24 border rounded px-1 py-1"
+                    />
+                  </td>
+                  <td className="p-2 text-gray-600">{entry.remaind ? parseFloat(entry.remaind).toFixed(2) : "—"}</td>
+                  <td className="p-2 text-center">
+                    <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
+                      <FaMinusCircle />
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -385,14 +413,14 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           </button>
           <div className="flex gap-3">
             {onCancel && <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">انصراف</button>}
-            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-primary text-white rounded-lg shadow-md flex items-center gap-2">
+            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-blue-600 text-white rounded-lg shadow-md flex items-center gap-2">
               {submitLoading ? <><FaSpinner className="animate-spin" />در حال ذخیره...</> : <><FaSave />{editingId ? "به‌روزرسانی" : "ذخیره همه"}</>}
             </button>
           </div>
         </div>
         {!editingId && (
           <p className="text-xs text-gray-400 mt-3">
-            توجه: پس از انتخاب درآمد، عرض نمایش داده می‌شود. با وارد کردن طول، مساحت (عرض×طول) محاسبه و به عنوان مقدار فروش در نظر گرفته می‌شود.
+            مساحت = عرض × طول. مبلغ کل = طول × قیمت واحد. باقیمانده = مبلغ کل - دریافتی.
           </p>
         )}
       </form>

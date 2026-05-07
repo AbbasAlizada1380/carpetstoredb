@@ -74,19 +74,19 @@ const Sidebar = ({ setActiveComponent }) => {
       icon: <MdInventory />,
     },
     {
-      name: "گدام کارخانه",
-      value: "CompanyStock",
+      name: "خریداران",
+      value: "buyer",
+      icon: <MdAttachMoney />,
+    },
+    {
+      name: "فروشندها",
+      value: "customer",
       icon: <MdFactory />,
     },
     {
       name: "مصارف",
       value: "ExpenseManager",
       icon: <MdPayments />,
-    },
-    {
-      name: "برداشت",
-      value: "Money",
-      icon: <MdAttachMoney />,
     },
     {
       name: "کارمندان",
@@ -98,11 +98,11 @@ const Sidebar = ({ setActiveComponent }) => {
       value: "SalaryManagement",
       icon: <MdPayments />,
     },
-    {
-      name: "داشبورد مالی",          // New item
-      value: "financialDashboard",    // Value used for navigation
-      icon: <FaChartLine />,
-    },
+    // {
+    //   name: "داشبورد مالی",          // New item
+    //   value: "financialDashboard",    // Value used for navigation
+    //   icon: <FaChartLine />,
+    // },
     {
       name: "ثبت کاربر جدید",
       value: "AddUser",

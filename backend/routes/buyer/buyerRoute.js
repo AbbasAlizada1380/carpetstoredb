@@ -9,7 +9,7 @@ import {
   deleteBuyer,
   searchBuyers,
   getActiveBuyers,
-} from "../../Controllers/buyer/BuyersController.js";
+} from "../../Controllers/buyer/buyerController.js";
 
 const BuyerRoute = express.Router();
 

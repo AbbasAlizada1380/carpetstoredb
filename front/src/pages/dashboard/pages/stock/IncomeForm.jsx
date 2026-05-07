@@ -4,7 +4,7 @@ import { FaSpinner, FaSave, FaTimes, FaMinusCircle, FaPlusCircle } from "react-i
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/income`;
-const CUSTOMER_API = `${BASE_URL}/customer`;
+const CUSTOMER_API = `${BASE_URL}/customer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
 const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {

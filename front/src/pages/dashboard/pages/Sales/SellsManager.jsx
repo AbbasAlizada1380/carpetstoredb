@@ -2,13 +2,15 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
 import SellForm from "./SellForm";
-import Pagination from "../../pagination/Pagination"; // imported your pagination component
+import Pagination from "../../pagination/Pagination";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/sells`;
+const CATEGORY_API = `${BASE_URL}/category`; // adjust if needed
 
 const SellManager = () => {
   const [sells, setSells] = useState([]);
+  const [categories, setCategories] = useState([]); // for category name mapping
   const [showForm, setShowForm] = useState(false);
   const [editingSell, setEditingSell] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -16,9 +18,19 @@ const SellManager = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(20);
+  const [itemsPerPage] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
+
+  // Fetch categories once for name mapping
+  const fetchCategories = async () => {
+    try {
+      const res = await axios.get(CATEGORY_API);
+      setCategories(res.data.categories || res.data);
+    } catch (err) {
+      console.error("Error loading categories:", err);
+    }
+  };
 
   // Fetch sells with pagination
   const fetchSells = async (page = currentPage, limit = itemsPerPage) => {
@@ -27,7 +39,7 @@ const SellManager = () => {
       const response = await axios.get(API_BASE_URL, {
         params: { page, limit },
       });
-      // Assuming backend returns: { data: [...], totalPages, currentPage, totalItems }
+      // Expected backend response: { data: [...], totalPages, currentPage, totalItems }
       const { data, totalPages: totalPagesRes, currentPage: currentPageRes, totalItems: totalItemsRes } = response.data;
       setSells(data);
       setTotalPages(totalPagesRes);
@@ -42,10 +54,12 @@ const SellManager = () => {
     }
   };
 
-  // Re-fetch when page or itemsPerPage changes
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
   useEffect(() => {
     fetchSells(currentPage, itemsPerPage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, itemsPerPage]);
 
   const handleEdit = (sell) => {
@@ -54,7 +68,6 @@ const SellManager = () => {
   };
 
   const handleFormSuccess = () => {
-    // After successful add/edit, refetch current page
     fetchSells(currentPage, itemsPerPage);
     setShowForm(false);
     setEditingSell(null);
@@ -70,7 +83,6 @@ const SellManager = () => {
     setLoading(true);
     try {
       await axios.delete(`${API_BASE_URL}/${id}`);
-      // After delete, if current page has only one item and it's not first page, go to previous page
       if (sells.length === 1 && currentPage > 1) {
         setCurrentPage(currentPage - 1);
       } else {
@@ -90,18 +102,33 @@ const SellManager = () => {
     }
   };
 
-
   const getInitialEntries = () => {
     if (editingSell) {
       return [{
-        categoryId: editingSell.categoryDetail?.id || "",
-        amount: editingSell.amount,
+        categoryId: editingSell.categoryId || "",
+        length: editingSell.length,
+        area: editingSell.area,
+        amount: editingSell.total,   // backend uses 'total', form expects 'amount'
         unit_price: editingSell.unit_price,
         receipt: editingSell.receipt,
         remaind: editingSell.remaind,
       }];
     }
-    return [{ categoryId: "", amount: "", unit_price: "", receipt: "", remaind: "" }];
+    return [{
+      categoryId: "",
+      length: "",
+      area: "",
+      amount: "",
+      unit_price: "",
+      receipt: "",
+      remaind: ""
+    }];
+  };
+
+  // Helper to get category name from ID
+  const getCategoryName = (categoryId) => {
+    const cat = categories.find(c => c.id === categoryId);
+    return cat ? cat.name : `دسته ${categoryId}`;
   };
 
   return (
@@ -119,7 +146,7 @@ const SellManager = () => {
               setEditingSell(null);
               setShowForm(true);
             }}
-            className="px-6 py-3 bg-primary text-white rounded-xl   transition font-medium shadow-md flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-xl hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md flex items-center gap-2"
           >
             <FaPlus />
             افزودن فروش جدید
@@ -157,7 +184,7 @@ const SellManager = () => {
 
       {/* Sells Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
-        <div className="bg-primary text-white p-4">
+        <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-white/20 rounded-full">
@@ -183,7 +210,7 @@ const SellManager = () => {
 
         {loading && sells.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
-            <FaSpinner className="text-4xl text-primary animate-spin mb-4" />
+            <FaSpinner className="text-4xl text-cyan-800 animate-spin mb-4" />
             <p className="text-gray-600">در حال بارگذاری فروش‌ها...</p>
           </div>
         ) : sells.length === 0 ? (
@@ -200,16 +227,17 @@ const SellManager = () => {
           <>
             <div className="overflow-x-auto">
               <table className="w-full text-center">
-                <thead className="bg-blue-50 text-primary">
+                <thead className="bg-blue-50 text-cyan-800">
                   <tr>
                     <th className="p-3 border-b font-semibold">شناسه</th>
                     <th className="p-3 border-b font-semibold">دسته‌بندی</th>
                     <th className="p-3 border-b font-semibold">مشتری</th>
-                    <th className="p-3 border-b font-semibold">مقدار</th>
-                    <th className="p-3 border-b font-semibold">قیمت واحد</th>
-                    <th className="p-3 border-b font-semibold">جمع</th>
-                    <th className="p-3 border-b font-semibold">دریافتی</th>
-                    <th className="p-3 border-b font-semibold">باقیمانده</th>
+                    <th className="p-3 border-b font-semibold">طول (متر)</th>
+                    <th className="p-3 border-b font-semibold">مساحت (م²)</th>
+                    <th className="p-3 border-b font-semibold">قیمت واحد (؋)</th>
+                    <th className="p-3 border-b font-semibold">جمع کل (؋)</th>
+                    <th className="p-3 border-b font-semibold">دریافتی (؋)</th>
+                    <th className="p-3 border-b font-semibold">باقیمانده (؋)</th>
                     <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
                 </thead>
@@ -218,13 +246,13 @@ const SellManager = () => {
                     <tr key={sell.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
                       <td className="p-3 text-gray-600">{sell.id}</td>
                       <td className="p-3 font-medium text-gray-800">
-                        {sell.categoryDetail?.name || "—"}
-                        {sell.categoryDetail?.type && (
-                          <span className="text-xs text-gray-500 block">({sell.categoryDetail.type.name})</span>
-                        )}
+                        {getCategoryName(sell.categoryId)}
+                       </td>
+                      <td className="p-3 font-medium text-gray-800">
+                        {sell.buyer?.fullname || "—"}
                       </td>
-                      <td className="p-3 font-medium text-gray-800">{sell.customerDetail?.fullname || "—"}</td>
-                      <td className="p-3">{sell.amount}</td>
+                      <td className="p-3">{sell.length || "—"}</td>
+                      <td className="p-3">{sell.area || "—"}</td>
                       <td className="p-3">{new Intl.NumberFormat().format(sell.unit_price)}</td>
                       <td className="p-3">{new Intl.NumberFormat().format(sell.total)}</td>
                       <td className="p-3">{new Intl.NumberFormat().format(sell.receipt)}</td>
@@ -233,7 +261,7 @@ const SellManager = () => {
                         <div className="flex items-center justify-center gap-2">
                           <button
                             onClick={() => handleEdit(sell)}
-                            className="p-2 text-primary hover:bg-blue-50 rounded-lg transition"
+                            className="p-2 text-yellow-600 hover:bg-yellow-50 rounded-lg transition"
                             title="ویرایش"
                           >
                             <FaEdit />
@@ -246,20 +274,21 @@ const SellManager = () => {
                             <FaTrash />
                           </button>
                         </div>
-                      </td>
-                    </tr>
+                       </td>
+                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {/* Pagination Component */}
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-            />
-            {/* Optional: show total items count */}
-            <div className="text-center text-gray-500 text-sm py-2">
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+              />
+            )}
+            <div className="text-center text-gray-500 text-sm py-2 border-t">
               مجموع {totalItems} فروش | صفحه {currentPage} از {totalPages}
             </div>
           </>

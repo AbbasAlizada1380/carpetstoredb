@@ -1,4 +1,4 @@
-import Buyer from "../../Models/buyer/Buyers.js"; // adjust path as needed
+import Buyer from "../../Models/buyer/buyer.js"; // adjust path as needed
 import { Op } from "sequelize";
 
 /* ===========================

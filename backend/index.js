@@ -15,6 +15,11 @@ import CategoryRouter from "./routes/grouping/CategoryRouter.js";
 import sellsRouter from "./routes/Stock/OutgoingRoute.js";
 import incomeRoute from "./routes/Stock/StockIncomeRoute.js";
 import ExpenseRoute from "./routes/ExpenseRoute.js";
+import BuyerRoute from "./routes/buyer/buyerRoute.js";
+import StaffRoute from "./routes/staff/StaffRoute.js";
+import AttendenceRoute from "./routes/staff/AttendenceRoute.js";
+import BuyerAccountRoute from "./routes/buyer/BuyerAccountRoute.js";
+import ReceiptRoute from "./routes/Finance/ReceiptRoute.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -62,7 +67,8 @@ app.use("/uploads", express.static(uploadsDirectory));
 // Routes
 app.use("/users", userRout);
 app.use("/expense", ExpenseRoute);
-// app.use("/orderItems", OrderItemRoute);
+app.use("/staff", StaffRoute);
+app.use("/attendance", AttendenceRoute);
 // app.use("/report", ReportRouter);
 app.use("/income", incomeRoute);
 app.use("/sells", sellsRouter);
@@ -70,6 +76,9 @@ app.use("/sells", sellsRouter);
 app.use("/customer", CustomerRoute);
 app.use("/type", TypeRouter);
 app.use("/category", CategoryRouter);
+app.use("/buyer", BuyerRoute);
+app.use("/buyeraccount", BuyerAccountRoute);
+app.use("/receipt", ReceiptRoute);
 
 // Sync database and start server
 sequelize

@@ -5,12 +5,12 @@ import Stock from "./pages/stock/Stock.jsx";
 import ExpenseManager from "./pages/expense/ExpenseManages";
 import StaffManager from "./pages/StaffManager";
 import SalaryManagement from "./pages/SalaryManagement";
-import TakingMoneyManager from "./pages/TakingMoneyManager";
-import CompanyStock from "./pages/CompanyStock";
 import TypeManager from "./pages/grouping/TypeManager";
 import CategoryManager from "./pages/grouping/CategoryManager";
 import SellManager from "./pages/Sales/SellsManager.jsx";
 import IncomeManager from "./pages/stock/IncomeManager.jsx";
+import CustomersManager from "./pages/CustomersManager.jsx";  
+import BuyerManagement from "./pages/buyer/BuyerManagement.jsx";
 const MainContent = ({ activeComponent }) => {
   const renderContent = () => {
     switch (activeComponent) {
@@ -20,10 +20,10 @@ const MainContent = ({ activeComponent }) => {
         return <SalaryManagement />;
       case "CategoryManager":
         return <CategoryManager />;
-      case "CompanyStock":
-        return <CompanyStock />
-      case "Money":
-        return <TakingMoneyManager />;
+      case "customer":
+        return <CustomersManager />
+      case "buyer":
+        return <BuyerManagement />;
       case "user managements":
         return <UserManagement />;
       case "report":
