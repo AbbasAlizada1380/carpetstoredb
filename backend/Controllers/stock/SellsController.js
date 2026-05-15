@@ -86,7 +86,6 @@ const createReceiptAndLink = async (buyerId, amount, description = "") => {
   return receipt;
 };
 
-
 export const createSell = async (req, res) => {
   try {
     let { sells } = req.body;
@@ -167,6 +166,22 @@ export const createSell = async (req, res) => {
       const newArea = parseFloat(income.width) * newLength;
       await income.update({ length: newLength, area: newArea });
 
+      // ========== If income is fully sold, move its ID from Category.EIncome to Category.SIncome ==========
+      const EPSILON = 1e-6;
+      if (newLength <= EPSILON) {
+        let eIncome = Array.isArray(category.EIncome) ? [...category.EIncome] : [];
+        let sIncome = Array.isArray(category.SIncome) ? [...category.SIncome] : [];
+        const incomeIdNum = parseInt(incomeId);
+
+        if (eIncome.includes(incomeIdNum)) {
+          eIncome = eIncome.filter(id => id !== incomeIdNum);
+        }
+        if (!sIncome.includes(incomeIdNum)) {
+          sIncome.push(incomeIdNum);
+        }
+        await category.update({ EIncome: eIncome, SIncome: sIncome });
+      }
+
       receipt = receipt || 0;
       const finalRemaind = remaind !== undefined ? parseFloat(remaind) : amountNum - receipt;
 
@@ -185,20 +200,19 @@ export const createSell = async (req, res) => {
 
       createdSells.push(newSell);
 
-      // === NEW: Update BuyerAccount and Receipt for this sell ===
-      // 1. Add sell ID to BuyerAccount
-      await addSellToBuyerAccount(finalBuyerId, newSell.id, receipt);
+      // ========== NEW: Add sell ID to the Income's Sells array ==========
+      let currentSells = income.Sells || [];
+      if (!currentSells.includes(newSell.id)) {
+        currentSells.push(newSell.id);
+        await income.update({ Sells: currentSells });
+      }
 
-      // 2. If receipt > 0, create a Receipt record
+      // Update BuyerAccount and Receipt
+      await addSellToBuyerAccount(finalBuyerId, newSell.id, receipt);
       if (receipt > 0) {
         const receiptDescription = `پرداخت برای فروش #${newSell.id} (${lengthNum}m × ${unitPriceNum} = ${amountNum}؋)`;
         await createReceiptAndLink(finalBuyerId, receipt, receiptDescription);
       }
-
-      // 3. (Optional) Store remaind ID if you have a Remaind model – here we push to remaindIds array
-      //    For simplicity, we'll just record the remaind amount in a separate array (e.g., remaindIds stores remaind record IDs)
-      //    Since no Remaind model exists, we can store the remaind value as a JSON object or ignore.
-      //    You can extend later.
 
       await syncSIncomeForType(typeId);
     }

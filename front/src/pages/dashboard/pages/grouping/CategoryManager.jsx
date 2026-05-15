@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaEdit, FaTrash, FaCheck, FaTimes, FaSpinner } from "react-icons/fa";
-
+import CategoryReports from "./CategoryReports";
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/category`;
 const TYPES_API = `${BASE_URL}/type`;
@@ -325,6 +325,7 @@ const CategoryManager = () => {
           </div>
         </div>
       )}
+    <CategoryReports/>
     </div>
   );
 };

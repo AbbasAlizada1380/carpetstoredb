@@ -41,6 +41,12 @@ const Income = sequelize.define(
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
       comment: "Length of the carpet",
+    }, 
+    Sells: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      defaultValue: [],
+      comment: "Array of IDs for sales",
     },
   },
   {

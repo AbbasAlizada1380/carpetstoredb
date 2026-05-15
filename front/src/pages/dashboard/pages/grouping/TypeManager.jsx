@@ -268,19 +268,6 @@ const TypeManager = () => {
                     placeholder="مثال: الکترونیک"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    دسته‌بندی‌ها (شناسه‌ها با کاما جدا کنید)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.categories.join("، ")}
-                    onChange={handleCategoriesChange}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
-                    placeholder="مثال: 1, 2, 5"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">شناسه دسته‌ها را با کامای انگلیسی (,) وارد کنید</p>
-                </div>
                 <div className="flex justify-end gap-3 pt-4">
                   <button
                     type="button"

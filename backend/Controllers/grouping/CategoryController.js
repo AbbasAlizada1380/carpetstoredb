@@ -1,4 +1,5 @@
 import { Category, Type,Income } from "../../Models/index.js";
+import { Op } from "sequelize";
 
 // Helper: Sync the categories JSON array of a Type based on its related Category records
 const syncTypeCategories = async (typeId) => {
@@ -168,6 +169,69 @@ export const getIncomesByCategory = async (req, res) => {
 
     res.status(200).json(incomes);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+
+
+export const getCategoryReports = async (req, res) => {
+  try {
+    // 1. Fetch all categories with their associated Type
+    const categories = await Category.findAll({
+      include: [
+        {
+          model: Type,
+          as: "type",
+          attributes: ["id", "name"],
+        },
+      ],
+      order: [["id", "ASC"]],
+    });
+
+    if (!categories.length) {
+      return res.status(200).json([]);
+    }
+
+    // 2. Process only categories that have at least one existing income (EIncome not empty)
+    const reports = await Promise.all(
+      categories
+        .filter(category => {
+          const eIncome = Array.isArray(category.EIncome) ? category.EIncome : [];
+          return eIncome.length > 0;
+        })
+        .map(async (category) => {
+          // Extract existing income IDs (EIncome)
+          const existingIds = Array.isArray(category.EIncome)
+            ? category.EIncome.map(id => Number(id))
+            : [];
+
+          // Fetch full Income objects for those IDs
+          let existingIncomes = [];
+          if (existingIds.length) {
+            existingIncomes = await Income.findAll({
+              where: { id: { [Op.in]: existingIds } },
+              order: [["id", "ASC"]],
+            });
+          }
+
+          // Return only what matters: category, its type, and its existing incomes
+          return {
+            id: category.id,
+            name: category.name,
+            type: category.type || null,
+            existingIncomes, // list of Income objects (each belongs to this category)
+            summary: {
+              totalExistingIncomes: existingIncomes.length,
+            },
+          };
+        })
+    );
+
+    res.status(200).json(reports);
+  } catch (error) {
+    console.error("Error in getCategoryReports:", error);
     res.status(500).json({ error: error.message });
   }
 };
