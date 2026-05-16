@@ -280,14 +280,11 @@ const SellManager = () => {
                 </tbody>
               </table>
             </div>
-            {/* Pagination */}
-            {totalPages > 1 && (
               <Pagination
                 currentPage={currentPage}
                 totalPages={totalPages}
                 onPageChange={handlePageChange}
               />
-            )}
             <div className="text-center text-gray-500 text-sm py-2 border-t">
               مجموع {totalItems} فروش | صفحه {currentPage} از {totalPages}
             </div>

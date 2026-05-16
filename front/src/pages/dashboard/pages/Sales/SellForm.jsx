@@ -184,52 +184,60 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
     }
 
-    let buyerPayload = {};
+    // Build the main payload object
+    const mainPayload = {};
+
     if (buyerMode === "existing") {
       if (!selectedBuyerId) {
         setError("لطفاً خریدار را از لیست انتخاب کنید");
         return;
       }
-      buyerPayload = { buyerId: selectedBuyerId };
+      mainPayload.buyerId = selectedBuyerId;
     } else {
       if (!newBuyerName.trim()) {
         setError("لطفاً نام خریدار جدید را وارد کنید");
         return;
       }
-      buyerPayload = { newBuyer: newBuyerName.trim() };
+      mainPayload.newBuyer = newBuyerName.trim();
     }
+
+    // Build the sells array
+    const sellsArray = entries.map(entry => {
+      const length = parseFloat(entry.length);
+      const unit_price = parseFloat(entry.unit_price);
+      const receipt = parseFloat(entry.receipt) || 0;
+      const total = length * unit_price;
+      const remaind = total - receipt;
+      const area = parseFloat(entry.area) || 0;
+      return {
+        categoryId: entry.categoryId,
+        incomeId: entry.incomeId,
+        length: length,
+        area: area,
+        amount: total.toFixed(2),
+        unit_price,
+        receipt,
+        remaind: remaind.toFixed(2),
+      };
+    });
+
+    // Attach sells array to main payload
+    mainPayload.sells = sellsArray;
 
     setSubmitLoading(true);
     setError("");
     try {
-      const payloads = entries.map(entry => {
-        const length = parseFloat(entry.length);
-        const unit_price = parseFloat(entry.unit_price);
-        const receipt = parseFloat(entry.receipt) || 0;
-        const total = length * unit_price;
-        const remaind = total - receipt;
-        const area = parseFloat(entry.area) || 0;
-        return {
-          categoryId: entry.categoryId,
-          incomeId: entry.incomeId,
-          length: length,
-          area: area,                    // ✅ area added
-          amount: total.toFixed(2),
-          unit_price,
-          receipt,
-          remaind: remaind.toFixed(2),
-          ...buyerPayload,
-        };
-      });
-
       if (editingId) {
-        await axios.put(`${SELLS_API_URL}/${editingId}`, payloads[0]);
+        // Edit mode – update a single sell (still uses first entry only)
+        await axios.put(`${SELLS_API_URL}/${editingId}`, sellsArray[0]);
       } else {
-        await axios.post(SELLS_API_URL, { sells: payloads });
+        // Create mode – send the whole structure: { buyerId/newBuyer, sells: [...] }
+        await axios.post(SELLS_API_URL, mainPayload);
       }
 
       onSuccess();
       if (!editingId) {
+        // Reset form
         setEntries([{
           typeId: "",
           categoryId: "",

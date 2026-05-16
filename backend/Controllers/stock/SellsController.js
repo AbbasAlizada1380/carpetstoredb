@@ -88,20 +88,26 @@ const createReceiptAndLink = async (buyerId, amount, description = "") => {
 
 export const createSell = async (req, res) => {
   try {
-    let { sells } = req.body;
+    // Extract root-level fields
+    let { sells, buyerId, newBuyer } = req.body;
 
-    if (!Array.isArray(sells)) {
-      sells = [req.body];
+    // If no sells array, but maybe single object? We'll handle both.
+    if (!sells) {
+      // If single sell object is sent directly (without wrapping)
+      if (req.body.categoryId) {
+        sells = [req.body];
+      } else {
+        return res.status(400).json({ message: "No sells array provided" });
+      }
     }
 
-    if (!sells.length) {
-      return res.status(400).json({ message: "No sell records provided" });
+    if (!Array.isArray(sells) || sells.length === 0) {
+      return res.status(400).json({ message: "Sells must be a non-empty array" });
     }
 
-    const { buyerId, newBuyer } = sells[0];
-
+    // Validate buyer info from root
     if (!buyerId && !newBuyer) {
-      return res.status(400).json({ message: "Either buyerId or newBuyer is required" });
+      return res.status(400).json({ message: "Either buyerId or newBuyer is required at root level" });
     }
 
     let finalBuyerId;
@@ -166,7 +172,7 @@ export const createSell = async (req, res) => {
       const newArea = parseFloat(income.width) * newLength;
       await income.update({ length: newLength, area: newArea });
 
-      // ========== If income is fully sold, move its ID from Category.EIncome to Category.SIncome ==========
+      // If income is fully sold, move its ID from Category.EIncome to Category.SIncome
       const EPSILON = 1e-6;
       if (newLength <= EPSILON) {
         let eIncome = Array.isArray(category.EIncome) ? [...category.EIncome] : [];
@@ -182,8 +188,9 @@ export const createSell = async (req, res) => {
         await category.update({ EIncome: eIncome, SIncome: sIncome });
       }
 
-      receipt = receipt || 0;
-      const finalRemaind = remaind !== undefined ? parseFloat(remaind) : amountNum - receipt;
+      // Use provided receipt/remaind or compute
+      const receiptAmount = parseFloat(receipt) || 0;
+      const finalRemaind = remaind !== undefined ? parseFloat(remaind) : amountNum - receiptAmount;
 
       // Create Sells record
       const newSell = await Sells.create({
@@ -192,7 +199,7 @@ export const createSell = async (req, res) => {
         unit_price: unitPriceNum,
         area: areaNum,
         length: lengthNum,
-        receipt,
+        receipt: receiptAmount,
         remaind: finalRemaind,
         total: amountNum,
         buyerId: finalBuyerId,
@@ -200,18 +207,18 @@ export const createSell = async (req, res) => {
 
       createdSells.push(newSell);
 
-      // ========== NEW: Add sell ID to the Income's Sells array ==========
+      // Add sell ID to the Income's Sells array
       let currentSells = income.Sells || [];
       if (!currentSells.includes(newSell.id)) {
         currentSells.push(newSell.id);
         await income.update({ Sells: currentSells });
       }
 
-      // Update BuyerAccount and Receipt
-      await addSellToBuyerAccount(finalBuyerId, newSell.id, receipt);
-      if (receipt > 0) {
+      // Update BuyerAccount and create Receipt if any payment
+      await addSellToBuyerAccount(finalBuyerId, newSell.id, receiptAmount);
+      if (receiptAmount > 0) {
         const receiptDescription = `پرداخت برای فروش #${newSell.id} (${lengthNum}m × ${unitPriceNum} = ${amountNum}؋)`;
-        await createReceiptAndLink(finalBuyerId, receipt, receiptDescription);
+        await createReceiptAndLink(finalBuyerId, receiptAmount, receiptDescription);
       }
 
       await syncSIncomeForType(typeId);
