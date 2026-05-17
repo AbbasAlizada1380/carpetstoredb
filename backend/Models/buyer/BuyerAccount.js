@@ -45,6 +45,19 @@ const BuyerAccount = sequelize.define(
       },
       comment: "Array of remaind IDs (could be references to seller debt records)",
     },
+    receiptSaleIds: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: "[]",
+      get() {
+        const raw = this.getDataValue("receiptSaleIds");
+        return raw ? JSON.parse(raw) : [];
+      },
+      set(value) {
+        this.setDataValue("receiptSaleIds", JSON.stringify(value));
+      },
+      comment: "Array of Receipt sales record IDs",
+    },
     receiptIds: {
       type: DataTypes.TEXT,
       allowNull: true,

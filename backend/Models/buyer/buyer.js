@@ -20,6 +20,7 @@ const Buyer = sequelize.define(
     },
   },
   {
+    tableName: 'buyers',
     timestamps: true,
   }
 );

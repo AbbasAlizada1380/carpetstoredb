@@ -8,7 +8,7 @@ const BUYER_API = `${BASE_URL}/buyer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
 const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  // Each entry: typeId, categoryId, incomeId, incomeWidth, length, area, total, unit_price, receipt, remaind
+  // Each entry: typeId, categoryId, incomeId, incomeWidth, length, area, total, unit_price
   const [entries, setEntries] = useState(
     initialEntries || [{
       typeId: "",
@@ -19,8 +19,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       area: "",
       total: "",
       unit_price: "",
-      receipt: "",
-      remaind: ""
     }]
   );
   const [buyers, setBuyers] = useState([]);
@@ -32,6 +30,9 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   const [incomesMap, setIncomesMap] = useState({});
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Global payment state
+  const [totalReceipt, setTotalReceipt] = useState("");
 
   useEffect(() => {
     fetchBuyers();
@@ -79,20 +80,27 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     }
   };
 
-  // Calculate area, total, and remaind
-  const calculateDerivedValues = (entry) => {
+  // Calculate area and total for a single entry
+  const calculateEntryValues = (entry) => {
     const length = parseFloat(entry.length) || 0;
     const width = parseFloat(entry.incomeWidth) || 0;
     const area = length * width;
     const unit_price = parseFloat(entry.unit_price) || 0;
-    const total = length * unit_price;   // still linear meter pricing
-    const receipt = parseFloat(entry.receipt) || 0;
-    const remaind = total - receipt;
+    const total = length * unit_price;
     return {
       area: area.toFixed(2),
       total: total.toFixed(2),
-      remaind: remaind.toFixed(2),
     };
+  };
+
+  // Recalculate all entries and also update global totals
+  const recalcAll = (newEntries) => {
+    const updated = newEntries.map(entry => {
+      const { area, total } = calculateEntryValues(entry);
+      return { ...entry, area, total };
+    });
+    setEntries(updated);
+    return updated;
   };
 
   const handleEntryChange = (index, field, value) => {
@@ -106,7 +114,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       newEntries[index].length = "";
       newEntries[index].area = "";
       newEntries[index].total = "";
-      newEntries[index].remaind = "";
       fetchCategoriesForType(value);
     }
     if (field === "categoryId") {
@@ -115,11 +122,9 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       newEntries[index].length = "";
       newEntries[index].area = "";
       newEntries[index].total = "";
-      newEntries[index].remaind = "";
       fetchIncomesForCategory(value);
     }
     if (field === "incomeId") {
-      // Find the selected income and store its width
       const selectedIncome = incomesMap[newEntries[index].categoryId]?.find(
         inc => inc.id === parseInt(value)
       );
@@ -127,18 +132,16 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       newEntries[index].length = "";
       newEntries[index].area = "";
       newEntries[index].total = "";
-      newEntries[index].remaind = "";
     }
 
-    // Recalculate area, total, remaind when length, unit_price, receipt, or incomeWidth changes
-    if (field === "length" || field === "unit_price" || field === "receipt" || field === "incomeWidth") {
-      const { area, total, remaind } = calculateDerivedValues(newEntries[index]);
+    // Recalculate area & total when length, unit_price, or incomeWidth changes
+    if (field === "length" || field === "unit_price" || field === "incomeWidth") {
+      const { area, total } = calculateEntryValues(newEntries[index]);
       newEntries[index].area = area;
       newEntries[index].total = total;
-      newEntries[index].remaind = remaind;
     }
 
-    setEntries(newEntries);
+    recalcAll(newEntries);
   };
 
   const addEntry = () => {
@@ -151,8 +154,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       area: "",
       total: "",
       unit_price: "",
-      receipt: "",
-      remaind: ""
     }]);
   };
 
@@ -161,7 +162,8 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       setError("حداقل یک ردیف باید وجود داشته باشد");
       return;
     }
-    setEntries(entries.filter((_, i) => i !== index));
+    const newEntries = entries.filter((_, i) => i !== index);
+    recalcAll(newEntries);
   };
 
   const validateEntry = (entry) => {
@@ -173,9 +175,15 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     return null;
   };
 
+  // Compute global totals
+  const totalAmount = entries.reduce((sum, entry) => sum + (parseFloat(entry.total) || 0), 0);
+  const receiptValue = parseFloat(totalReceipt) || 0;
+  const totalRemaind = totalAmount - receiptValue;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    // Validate each sell row
     for (let i = 0; i < entries.length; i++) {
       const err = validateEntry(entries[i]);
       if (err) {
@@ -184,9 +192,18 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
     }
 
-    // Build the main payload object
-    const mainPayload = {};
+    // Validate global receipt
+    if (receiptValue < 0) {
+      setError("مبلغ دریافتی نمی‌تواند منفی باشد");
+      return;
+    }
+    if (receiptValue > totalAmount + 0.01) {
+      setError("مبلغ دریافتی نمی‌تواند بیشتر از کل فاکتور باشد");
+      return;
+    }
 
+    // Build buyer info
+    const mainPayload = {};
     if (buyerMode === "existing") {
       if (!selectedBuyerId) {
         setError("لطفاً خریدار را از لیست انتخاب کنید");
@@ -201,43 +218,49 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       mainPayload.newBuyer = newBuyerName.trim();
     }
 
-    // Build the sells array
+    // --- NEW: Sequential (top‑to‑bottom) receipt allocation ---
+    let remainingReceipt = receiptValue;
     const sellsArray = entries.map(entry => {
       const length = parseFloat(entry.length);
       const unit_price = parseFloat(entry.unit_price);
-      const receipt = parseFloat(entry.receipt) || 0;
-      const total = length * unit_price;
-      const remaind = total - receipt;
+      const amount = parseFloat(entry.total);
       const area = parseFloat(entry.area) || 0;
+
+      let receiptForThisSell = 0;
+      if (remainingReceipt > 0) {
+        receiptForThisSell = Math.min(amount, remainingReceipt);
+        remainingReceipt -= receiptForThisSell;
+      }
+      // Round to 2 decimals
+      receiptForThisSell = Math.round(receiptForThisSell * 100) / 100;
+      const remaind = amount - receiptForThisSell;
+
       return {
         categoryId: entry.categoryId,
         incomeId: entry.incomeId,
         length: length,
         area: area,
-        amount: total.toFixed(2),
+        amount: amount.toFixed(2),
         unit_price,
-        receipt,
+        receipt: receiptForThisSell,
         remaind: remaind.toFixed(2),
       };
     });
+    // ---------------------------------------------------------
 
-    // Attach sells array to main payload
     mainPayload.sells = sellsArray;
 
     setSubmitLoading(true);
     setError("");
     try {
       if (editingId) {
-        // Edit mode – update a single sell (still uses first entry only)
         await axios.put(`${SELLS_API_URL}/${editingId}`, sellsArray[0]);
       } else {
-        // Create mode – send the whole structure: { buyerId/newBuyer, sells: [...] }
         await axios.post(SELLS_API_URL, mainPayload);
       }
 
       onSuccess();
       if (!editingId) {
-        // Reset form
         setEntries([{
           typeId: "",
           categoryId: "",
@@ -247,12 +270,11 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           area: "",
           total: "",
           unit_price: "",
-          receipt: "",
-          remaind: ""
         }]);
         setBuyerMode("existing");
         setSelectedBuyerId("");
         setNewBuyerName("");
+        setTotalReceipt("");
       } else {
         onCancel();
       }
@@ -284,6 +306,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         </div>
       )}
 
+      {/* Buyer section */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <label className="block text-sm font-medium text-gray-700 mb-2">خریدار <span className="text-red-500">*</span></label>
         <div className="flex gap-4 mb-3">
@@ -306,6 +329,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         )}
       </div>
 
+      {/* Sells table */}
       <form onSubmit={handleSubmit}>
         <div className="overflow-x-auto mb-4">
           <table className="w-full text-sm border-collapse">
@@ -320,8 +344,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">مساحت (محاسبه)</th>
                 <th className="p-2 border">قیمت واحد*</th>
                 <th className="p-2 border">مبلغ کل (محاسبه)</th>
-                <th className="p-2 border">دریافتی</th>
-                <th className="p-2 border">باقیمانده (محاسبه)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
             </thead>
@@ -394,16 +416,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                     />
                   </td>
                   <td className="p-2 text-gray-700 font-medium">{entry.total || "—"} ؋</td>
-                  <td className="p-2">
-                    <input
-                      type="number"
-                      step="any"
-                      value={entry.receipt}
-                      onChange={(e) => handleEntryChange(idx, "receipt", e.target.value)}
-                      className="w-24 border rounded px-1 py-1"
-                    />
-                  </td>
-                  <td className="p-2 text-gray-600">{entry.remaind ? parseFloat(entry.remaind).toFixed(2) : "—"}</td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
                       <FaMinusCircle />
@@ -413,6 +425,34 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Payment section (global) */}
+        <div className="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
+              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)} ؋</div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
+              <input
+                type="number"
+                step="any"
+                value={totalReceipt}
+                onChange={(e) => setTotalReceipt(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-lg"
+                placeholder="مبلغ دریافت شده"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
+              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)} ؋</div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            * مبلغ دریافتی به نسبت مبلغ هر ردیف به‌طور خودکار بین اقلام تقسیم می‌شود.
+          </p>
         </div>
 
         <div className="flex justify-between items-center">
@@ -428,7 +468,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         </div>
         {!editingId && (
           <p className="text-xs text-gray-400 mt-3">
-            مساحت = عرض × طول. مبلغ کل = طول × قیمت واحد. باقیمانده = مبلغ کل - دریافتی.
+            مساحت = عرض × طول. مبلغ کل = طول × قیمت واحد. باقیمانده کل = جمع کل - دریافتی.
           </p>
         )}
       </form>

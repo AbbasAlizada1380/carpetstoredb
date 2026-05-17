@@ -5,8 +5,9 @@ import Type from "./grouping/Type.js";
 import Sells from "./Stock/Sells.js";
 import Income from "./Stock/income.js";
 import Buyer from "./buyer/buyer.js";
-import BuyerAccount from "./buyer/BuyerAccount.js";  // new model
-import Receipt from "./Finance/Receipt.js";            // new model
+import BuyerAccount from "./buyer/BuyerAccount.js";
+import Receipt from "./Finance/Receipt.js";
+import Bill from "./bill/Bill.js";                    // <-- import Bill model
 
 // ---------- Define associations ----------
 // Type ↔ Category
@@ -25,14 +26,20 @@ Sells.belongsTo(Buyer, { foreignKey: "buyerId", as: "buyer" });
 Sells.belongsTo(Income, { foreignKey: "incomeId", as: "income" });
 Income.hasMany(Sells, { foreignKey: "incomeId", as: "sells" });
 
-// ---------- New accounting associations ----------
-// Buyer ↔ BuyerAccount (one‑to‑one: each buyer has exactly one account)
+// ---------- Accounting associations ----------
+// Buyer ↔ BuyerAccount (one‑to‑one)
 Buyer.hasOne(BuyerAccount, { foreignKey: "buyerId", as: "account" });
 BuyerAccount.belongsTo(Buyer, { foreignKey: "buyerId", as: "buyer" });
 
 // Buyer ↔ Receipt (one‑to‑many)
 Buyer.hasMany(Receipt, { foreignKey: "buyerId", as: "receipts" });
 Receipt.belongsTo(Buyer, { foreignKey: "buyerId", as: "buyer" });
+
+// ---------- Bill associations ----------
+// Bill belongs to Buyer (each bill has one buyer)
+Bill.belongsTo(Buyer, { foreignKey: "buyerId", as: "buyer" });
+// Buyer has many Bills
+Buyer.hasMany(Bill, { foreignKey: "buyerId", as: "bills" });
 
 // ------------------------------------------
 
@@ -45,4 +52,5 @@ export {
   Buyer,
   BuyerAccount,
   Receipt,
+  Bill,                 // <-- export Bill
 };
