@@ -63,11 +63,9 @@ const addSellToBuyerAccount = async (buyerId, sellId, remaindAmount) => {
   let remaindIds = account.remaindIds || [];
 
   if (remaindAmount === 0) {
-    // Fully paid → add to receiptSaleIds, remove from remaindIds
     if (!receiptSaleIds.includes(sellId)) receiptSaleIds.push(sellId);
     remaindIds = remaindIds.filter(id => id !== sellId);
   } else {
-    // Not fully paid → add to remaindIds, remove from receiptSaleIds
     if (!remaindIds.includes(sellId)) remaindIds.push(sellId);
     receiptSaleIds = receiptSaleIds.filter(id => id !== sellId);
   }
@@ -238,15 +236,10 @@ export const createSell = async (req, res) => {
       }
 
       await addSellToBuyerAccount(finalBuyerId, newSell.id, finalRemaind);
-
-      // ❌ Removed per‑sell receipt creation → will create one receipt for the whole bill later
-
       await syncSIncomeForType(typeId);
     }
 
-    // -------------------------
-    // 1. Create the Bill (after all sells are processed)
-    // -------------------------
+    // Create the Bill
     const billNumber = await generateBillNumber();
     const remainingAmount = totalAmountSum - totalReceiptSum;
     let status = "unpaid";
@@ -268,17 +261,14 @@ export const createSell = async (req, res) => {
       sells: sellIds,
     });
 
-    // -------------------------
-    // 2. Create ONE receipt for the total paid amount (if any)
-    // -------------------------
+    // Create ONE receipt for the total paid amount and capture it
+    let createdReceipt = null;
     if (totalReceiptSum > 0) {
       const receiptDescription = `پرداخت برای فاکتور ${billNumber} (جمع کل ${totalAmountSum}؋)`;
-      await createReceiptAndLink(finalBuyerId, totalReceiptSum, receiptDescription);
+      createdReceipt = await createReceiptAndLink(finalBuyerId, totalReceiptSum, receiptDescription);
     }
 
-    // -------------------------
-    // 3. Return response
-    // -------------------------
+    // Fetch detailed sells for response
     const createdWithDetails = await Sells.findAll({
       where: { id: sellIds },
       include: [
@@ -288,15 +278,19 @@ export const createSell = async (req, res) => {
       ],
     });
 
+    // Return response including the receipt
     res.status(201).json({
       sells: createdWithDetails,
       bill: newBill,
+      receipt: createdReceipt,
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
+
+
 export const getAllSells = async (req, res) => {
   try {
     // Pagination parameters

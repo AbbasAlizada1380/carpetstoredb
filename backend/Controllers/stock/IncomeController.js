@@ -1,103 +1,239 @@
+// Controllers/stock/IncomeController.js
 import Customer from "../../Models/customer/Customers.js";
+import CustomerAccount from "../../Models/customer/CustomerAccount.js";
+import { IncomeBill } from "../../Models/index.js";
 import { Income, Type, Category } from "../../Models/index.js";
+import sequelize from "../../dbconnection.js";
 
-// ======================= HELPERS =======================
-
-// Calculate length from area and width
 const calculateLength = (area, width) => {
   if (!area || !width || width === 0) return null;
   return area / width;
 };
 
-// Add income ID to Category.EIncome array (fixed version)
+// ---------- NEW: Update customer account with BILL ID (not income IDs) ----------
+const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) => {
+  let account = await CustomerAccount.findOne({ where: { customerId } });
+  if (!account) {
+    account = await CustomerAccount.create({
+      customerId,
+      paid: [],
+      unpaid: [],
+      total: [],
+      returned: [],
+      pay: [],
+      receive: [],
+    });
+  }
+
+  const addToArray = (arr, id) => (arr.includes(id) ? arr : [...arr, id]);
+  const removeFromArray = (arr, id) => arr.filter(item => item !== id);
+
+  let total = account.total || [];
+  let paid = account.paid || [];
+  let unpaid = account.unpaid || [];
+
+  total = addToArray(total, billId);
+
+  if (isFullyPaid) {
+    paid = addToArray(paid, billId);
+    unpaid = removeFromArray(unpaid, billId);
+  } else {
+    unpaid = addToArray(unpaid, billId);
+    paid = removeFromArray(paid, billId);
+  }
+
+  await account.update({ total, paid, unpaid });
+  return account;
+};
+
+// Add income ID to Category.EIncome (unchanged)
 const addIncomeToCategoryEIncome = async (categoryId, incomeId) => {
   if (!categoryId || !incomeId) return;
-
   const sequelize = Category.sequelize;
-  // Raw SQL to append incomeId to the JSON array, creating the array if it doesn't exist
   await sequelize.query(
     `UPDATE Categories 
      SET EIncome = JSON_ARRAY_APPEND(COALESCE(EIncome, JSON_ARRAY()), '$', :incomeId) 
      WHERE id = :categoryId`,
-    {
-      replacements: { categoryId, incomeId },
-      type: sequelize.QueryTypes.UPDATE
-    }
+    { replacements: { categoryId, incomeId }, type: sequelize.QueryTypes.UPDATE }
   );
-  console.log(`✅ Raw SQL updated EIncome for category ${categoryId}, added income ${incomeId}`);
 };
 
-const removeIncomeFromCategoryEIncome = async (categoryId, incomeId) => {
-  if (!categoryId || !incomeId) return;
-  const category = await Category.findByPk(categoryId);
-  if (!category) return;
-
-  let eIncomeArray = category.EIncome;
-  if (typeof eIncomeArray === "string") eIncomeArray = JSON.parse(eIncomeArray);
-  if (!Array.isArray(eIncomeArray)) return;
-
-  const newArray = eIncomeArray.filter(id => id !== incomeId);
-  await category.update({ EIncome: newArray });
+// Generate unique bill number
+const generateBillNumber = async () => {
+  const lastBill = await IncomeBill.findOne({ order: [['id', 'DESC']], attributes: ['billNumber'] });
+  let nextNumber = 1;
+  if (lastBill && lastBill.billNumber) {
+    const match = lastBill.billNumber.match(/\d+$/);
+    if (match) nextNumber = parseInt(match[0]) + 1;
+  }
+  return `INV-${nextNumber.toString().padStart(6, '0')}`;
 };
 
-// ======================= CREATE =======================
 export const createIncome = async (req, res) => {
+  let transaction;
+
   try {
-    let { width, color, degree, lotNumber, area, customerId, newCustomer, typeId, categoryId } = req.body;
+    let { incomes, customerId, newCustomer, totalReceipt } = req.body;
 
-    // Validation same as before...
-    if (!width || width <= 0) return res.status(400).json({ message: "Width must be a positive number" });
-    if (!area || area <= 0) return res.status(400).json({ message: "Area must be a positive number" });
-    if (!color) return res.status(400).json({ message: "Color is required" });
-    if (!lotNumber) return res.status(400).json({ message: "Lot number is required" });
-    if (!customerId && !newCustomer) return res.status(400).json({ message: "Either customerId or newCustomer is required" });
-    if (!typeId) return res.status(400).json({ message: "Type ID is required" });
-    if (!categoryId) return res.status(400).json({ message: "Category ID is required" });
+    if (!incomes && req.body.typeId) incomes = [req.body];
+    if (!incomes || !Array.isArray(incomes) || incomes.length === 0) {
+      return res.status(400).json({ message: "Incomes array is required and must not be empty" });
+    }
 
-    const existing = await Income.findOne({ where: { lotNumber } });
-    if (existing) return res.status(400).json({ message: "Lot number already exists" });
+    transaction = await sequelize.transaction();
 
-    const typeExists = await Type.findByPk(typeId);
-    if (!typeExists) return res.status(400).json({ message: "Invalid Type ID" });
-    const categoryExists = await Category.findByPk(categoryId);
-    if (!categoryExists) return res.status(400).json({ message: "Invalid Category ID" });
-
-    const length = calculateLength(area, width);
-    if (!length) return res.status(400).json({ message: "Could not calculate length from area and width" });
-
+    // ----- Customer handling -----
     let finalCustomerId = null;
     if (customerId) {
-      const customer = await Customer.findByPk(customerId);
-      if (!customer) return res.status(400).json({ message: "Provided customerId does not exist" });
+      const customer = await Customer.findByPk(customerId, { transaction });
+      if (!customer) throw new Error("Provided customerId does not exist");
       finalCustomerId = customer.id;
-    } else if (newCustomer) {
-      const newCust = await Customer.create({ fullname: newCustomer.trim(), isActive: false });
-      finalCustomerId = newCust.id;
+    } else if (newCustomer && newCustomer.trim()) {
+      const trimmedName = newCustomer.trim().toLowerCase();
+      let existingCustomer = await Customer.findOne({
+        where: sequelize.where(sequelize.fn('LOWER', sequelize.col('fullname')), trimmedName),
+        transaction,
+      });
+      if (existingCustomer) finalCustomerId = existingCustomer.id;
+      else {
+        const newCust = await Customer.create({ fullname: newCustomer.trim(), isActive: false }, { transaction });
+        finalCustomerId = newCust.id;
+      }
+    } else throw new Error("Either customerId or newCustomer is required");
+
+    const createdIncomes = [];
+    const lotNumbersSet = new Set();
+
+    for (let i = 0; i < incomes.length; i++) {
+      const inc = incomes[i];
+      const { typeId, categoryId, width, color, degree, lotNumber, area, unit_price, amount } = inc;
+
+      if (!typeId) throw new Error(`Income ${i + 1}: Type ID is required`);
+      if (!categoryId) throw new Error(`Income ${i + 1}: Category ID is required`);
+      if (!width || parseFloat(width) <= 0) throw new Error(`Income ${i + 1}: Width must be a positive number`);
+      if (!area || parseFloat(area) <= 0) throw new Error(`Income ${i + 1}: Area must be a positive number`);
+      if (!color?.trim()) throw new Error(`Income ${i + 1}: Color is required`);
+      if (!lotNumber?.trim()) throw new Error(`Income ${i + 1}: Lot number is required`);
+      if (!unit_price || parseFloat(unit_price) <= 0) throw new Error(`Income ${i + 1}: Unit price must be a positive number`);
+
+      if (lotNumbersSet.has(lotNumber.trim())) {
+        throw new Error(`Income ${i + 1}: Duplicate lot number "${lotNumber}" within the same request`);
+      }
+      lotNumbersSet.add(lotNumber.trim());
+
+      const existingIncome = await Income.findOne({ where: { lotNumber: lotNumber.trim() }, transaction });
+      if (existingIncome) throw new Error(`Income ${i + 1}: Lot number "${lotNumber}" already exists`);
+
+      const typeExists = await Type.findByPk(typeId, { transaction });
+      if (!typeExists) throw new Error(`Income ${i + 1}: Invalid Type ID ${typeId}`);
+      const categoryExists = await Category.findByPk(categoryId, { transaction });
+      if (!categoryExists) throw new Error(`Income ${i + 1}: Invalid Category ID ${categoryId}`);
+
+      const length = calculateLength(parseFloat(area), parseFloat(width));
+      if (!length) throw new Error(`Income ${i + 1}: Could not calculate length from area and width`);
+
+      const calculatedAmount = parseFloat(area) * parseFloat(unit_price);
+      if (Math.abs(calculatedAmount - parseFloat(amount)) > 0.01) {
+        throw new Error(`Income ${i + 1}: Amount mismatch – expected ${calculatedAmount}, received ${amount}`);
+      }
+
+      const newIncome = await Income.create({
+        width: parseFloat(width),
+        color: color.trim(),
+        degree: degree?.trim() || null,
+        lotNumber: lotNumber.trim(),
+        area: parseFloat(area),
+        length: parseFloat(length),
+        customerId: finalCustomerId,
+        typeId,
+        categoryId,
+        unit_price: parseFloat(unit_price),
+        amount: parseFloat(amount),
+        paidAmount: 0,
+        remaind: parseFloat(amount),
+      }, { transaction });
+
+      createdIncomes.push(newIncome);
     }
 
-    const newIncome = await Income.create({
-      width,
-      color,
-      degree: degree || null,
-      lotNumber,
-      area,
-      length,
+    await transaction.commit();
+    transaction = null;
+
+    // ----- Apply payment sequentially to incomes -----
+    let remainingReceipt = parseFloat(totalReceipt) || 0;
+    const totalInvoiceAmount = createdIncomes.reduce((sum, inc) => sum + parseFloat(inc.amount), 0);
+
+    if (remainingReceipt > totalInvoiceAmount + 0.01) {
+      return res.status(400).json({ message: "Payment amount exceeds total invoice amount" });
+    }
+
+    const fullyPaidIds = [];
+    const sortedIncomes = [...createdIncomes].sort((a, b) => a.id - b.id);
+
+    for (const income of sortedIncomes) {
+      if (remainingReceipt <= 0) break;
+      const currentRemaind = parseFloat(income.remaind);
+      const amountToPay = Math.min(remainingReceipt, currentRemaind);
+      const newPaidAmount = parseFloat(income.paidAmount) + amountToPay;
+      const newRemaind = currentRemaind - amountToPay;
+
+      await income.update({ paidAmount: newPaidAmount, remaind: newRemaind });
+      remainingReceipt -= amountToPay;
+      if (newRemaind === 0) fullyPaidIds.push(income.id);
+    }
+
+    // ----- Update Category.EIncome (income‑level, stays as before) -----
+    for (const income of createdIncomes) {
+      await addIncomeToCategoryEIncome(income.categoryId, income.id);
+    }
+
+    // ----- Create incomeBill -----
+    const billNumber = await generateBillNumber();
+    const totalPaid = parseFloat(totalReceipt) || 0;
+    const remainingAmount = totalInvoiceAmount - totalPaid;
+    let billStatus = "unpaid";
+    if (remainingAmount === 0) billStatus = "paid";
+    else if (totalPaid > 0 && remainingAmount > 0) billStatus = "partial";
+
+    const newBill = await IncomeBill.create({
+      billNumber,
       customerId: finalCustomerId,
-      typeId,
-      categoryId,
+      date: new Date(),
+      totalAmount: totalInvoiceAmount,
+      paidAmount: totalPaid,
+      remainingAmount,
+      status: billStatus,
+      notes: null,
+      discount_percent: 0,
+      discounted_amount: 0,
+      Incomes: createdIncomes.map(i => i.id),
     });
 
-    // ✅ Add income ID to Category.EIncome
-    await addIncomeToCategoryEIncome(categoryId, newIncome.id);
+    // ----- Update CustomerAccount with the BILL ID (single call) -----
+    const isBillFullyPaid = (billStatus === 'paid');
+    await updateCustomerAccountWithBill(finalCustomerId, newBill.id, isBillFullyPaid);
 
-    const freshCategory = await Category.findByPk(categoryId);
-    console.log("After update, DB value of EIncome:", freshCategory.EIncome);
-    res.status(201).json(newIncome);
+    // ----- Response -----
+    const incomesWithDetails = await Income.findAll({
+      where: { id: createdIncomes.map(i => i.id) },
+      include: [
+        { model: Category, as: "category" },
+        { model: Type, as: "type" },
+        { model: Customer, as: "customer" },
+      ],
+    });
+
+    res.status(201).json({
+      message: `${createdIncomes.length} income(s) created successfully`,
+      incomes: incomesWithDetails,
+      bill: newBill,
+    });
   } catch (error) {
+    if (transaction) await transaction.rollback();
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
-
 // ======================= READ ALL (with pagination) =======================
 export const getAllIncomes = async (req, res) => {
   try {

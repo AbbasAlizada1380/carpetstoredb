@@ -9,8 +9,9 @@ import TypeManager from "./pages/grouping/TypeManager";
 import CategoryManager from "./pages/grouping/CategoryManager";
 import SellManager from "./pages/Sales/SellsManager.jsx";
 import IncomeManager from "./pages/stock/IncomeManager.jsx";
-import CustomersManager from "./pages/CustomersManager.jsx";  
+import CustomersManager from "./pages/CustomersManager.jsx";
 import BuyerManagement from "./pages/buyer/BuyerManagement.jsx";
+import PayManager from "./pages/finance/PayManager.jsx";
 const MainContent = ({ activeComponent }) => {
   const renderContent = () => {
     switch (activeComponent) {
@@ -22,6 +23,8 @@ const MainContent = ({ activeComponent }) => {
         return <CategoryManager />;
       case "customer":
         return <CustomersManager />
+      case "pay":
+        return <PayManager />
       case "buyer":
         return <BuyerManagement />;
       case "user managements":

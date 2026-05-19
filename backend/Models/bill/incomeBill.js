@@ -1,26 +1,21 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../../dbconnection.js";
 
-const Bill = sequelize.define(
-  "Bill",
+const IncomeBill = sequelize.define(
+  "IncomeBill",
   {
     billNumber: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
     },
-    buyerId: {
+    customerId: {                     // ✅ single foreign key field
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "buyers",
+        model: "Customers",           // ✅ exact table name (plural, capital C)
         key: "id",
       },
-    },
-    date: {
-      type: DataTypes.DATEONLY,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
     },
     totalAmount: {
       type: DataTypes.DECIMAL(12, 2),
@@ -53,15 +48,16 @@ const Bill = sequelize.define(
       allowNull: true,
       defaultValue: 0,
     },
-    sells: {
-      type: DataTypes.JSON,      // stores array of sell IDs e.g. [1, 2, 3]
+    Incomes: {
+      type: DataTypes.JSON,
       allowNull: false,
       defaultValue: [],
     },
   },
-  {tableName: "Bill", 
+  {
+    tableName: "incomeBill",
     timestamps: true,
   }
 );
 
-export default Bill;
+export default IncomeBill;

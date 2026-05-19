@@ -8,18 +8,31 @@ const CUSTOMER_API = `${BASE_URL}/customer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
 const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  // Each entry: typeId, categoryId, width, color, degree, lotNumber, area, length
   const [entries, setEntries] = useState(
-    initialEntries || [{ typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]
+    initialEntries || [{
+      typeId: "",
+      categoryId: "",
+      width: "",
+      color: "",
+      degree: "",
+      lotNumber: "",
+      area: "",
+      length: "",           // for display only
+      unit_price: "",
+      total: ""             // calculated = area * unit_price
+    }]
   );
   const [customers, setCustomers] = useState([]);
   const [customerMode, setCustomerMode] = useState("existing");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
   const [types, setTypes] = useState([]);
-  const [categoriesMap, setCategoriesMap] = useState({}); // { typeId: [categories] }
+  const [categoriesMap, setCategoriesMap] = useState({});
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState("");
+  
+  // Global payment state
+  const [totalReceipt, setTotalReceipt] = useState("");
 
   useEffect(() => {
     fetchCustomers();
@@ -46,7 +59,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
   const fetchCategoriesForType = async (typeId) => {
     if (!typeId) return;
-    if (categoriesMap[typeId]) return; // already loaded
+    if (categoriesMap[typeId]) return;
     try {
       const res = await axios.get(`${TYPE_API}/${typeId}/categories`);
       setCategoriesMap(prev => ({ ...prev, [typeId]: res.data }));
@@ -55,11 +68,17 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     }
   };
 
-  const calculateLength = (width, area) => {
-    if (width && area && parseFloat(width) > 0) {
-      return (parseFloat(area) / parseFloat(width)).toFixed(2);
-    }
-    return "";
+  // Calculate length (area/width) and total (area * unit_price)
+  const calculateEntryValues = (entry) => {
+    const width = parseFloat(entry.width) || 0;
+    const area = parseFloat(entry.area) || 0;
+    const length = (width > 0 && area > 0) ? (area / width) : 0;
+    const unit_price = parseFloat(entry.unit_price) || 0;
+    const total = area * unit_price;  // ✅ total based on area
+    return {
+      length: length.toFixed(2),
+      total: total.toFixed(2)
+    };
   };
 
   const handleEntryChange = (index, field, value) => {
@@ -67,18 +86,33 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     newEntries[index][field] = value;
 
     if (field === "typeId") {
-      // Reset category when type changes
       newEntries[index].categoryId = "";
       fetchCategoriesForType(value);
     }
-    if (field === "width" || field === "area") {
-      newEntries[index].length = calculateLength(newEntries[index].width, newEntries[index].area);
+    
+    // Recalculate length and total when width, area, or unit_price changes
+    if (["width", "area", "unit_price"].includes(field)) {
+      const { length, total } = calculateEntryValues(newEntries[index]);
+      newEntries[index].length = length;
+      newEntries[index].total = total;
     }
+    
     setEntries(newEntries);
   };
 
   const addEntry = () => {
-    setEntries([...entries, { typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]);
+    setEntries([...entries, {
+      typeId: "",
+      categoryId: "",
+      width: "",
+      color: "",
+      degree: "",
+      lotNumber: "",
+      area: "",
+      length: "",
+      unit_price: "",
+      total: ""
+    }]);
   };
 
   const removeEntry = (index) => {
@@ -96,13 +130,19 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (!entry.area || parseFloat(entry.area) <= 0) return "مساحت باید بزرگتر از صفر باشد";
     if (!entry.color.trim()) return "رنگ الزامی است";
     if (!entry.lotNumber.trim()) return "شماره لات الزامی است";
+    if (!entry.unit_price || parseFloat(entry.unit_price) <= 0) return "قیمت واحد باید بزرگتر از صفر باشد";
     return null;
   };
+
+  // Compute global totals (based on area * unit_price)
+  const totalAmount = entries.reduce((sum, entry) => sum + (parseFloat(entry.total) || 0), 0);
+  const receiptValue = parseFloat(totalReceipt) || 0;
+  const totalRemaind = totalAmount - receiptValue;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    // Validate all entries
+    // Validate each entry
     for (let i = 0; i < entries.length; i++) {
       const err = validateEntry(entries[i]);
       if (err) {
@@ -111,49 +151,79 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
     }
 
-    // Customer part
-    let customerPayload = {};
+    // Validate receipt
+    if (receiptValue < 0) {
+      setError("مبلغ دریافتی نمی‌تواند منفی باشد");
+      return;
+    }
+    if (receiptValue > totalAmount + 0.01) {
+      setError("مبلغ دریافتی نمی‌تواند بیشتر از کل فاکتور باشد");
+      return;
+    }
+
+    // Build customer part
+    const mainPayload = {};
     if (customerMode === "existing") {
       if (!selectedCustomerId) {
         setError("لطفاً مشتری را از لیست انتخاب کنید");
         return;
       }
-      customerPayload = { customerId: selectedCustomerId };
+      mainPayload.customerId = selectedCustomerId;
     } else {
       if (!newCustomerName.trim()) {
         setError("لطفاً نام مشتری جدید را وارد کنید");
         return;
       }
-      customerPayload = { newCustomer: newCustomerName.trim() };
+      mainPayload.newCustomer = newCustomerName.trim();
     }
 
-    setSubmitLoading(true);
-    setError("");
-    try {
-      const payloads = entries.map(entry => ({
+    // Build incomes array using area * unit_price for amount
+    const incomesArray = entries.map(entry => {
+      const area = parseFloat(entry.area);
+      const unit_price = parseFloat(entry.unit_price);
+      const amount = area * unit_price;          // ✅ amount = area × unit_price
+      return {
         typeId: entry.typeId,
         categoryId: entry.categoryId,
         width: parseFloat(entry.width),
         color: entry.color.trim(),
         degree: entry.degree.trim() || null,
         lotNumber: entry.lotNumber.trim(),
-        area: parseFloat(entry.area),
-        ...customerPayload,
-      }));
+        area: area,
+        unit_price: unit_price,
+        amount: amount.toFixed(2)
+      };
+    });
 
+    mainPayload.incomes = incomesArray;
+    mainPayload.totalReceipt = receiptValue;
+
+    setSubmitLoading(true);
+    setError("");
+    try {
       if (editingId) {
-        await axios.put(`${API_BASE_URL}/${editingId}`, payloads[0]);
+        await axios.put(`${API_BASE_URL}/${editingId}`, incomesArray[0]);
       } else {
-        for (const payload of payloads) {
-          await axios.post(API_BASE_URL, payload);
-        }
+        await axios.post(API_BASE_URL, mainPayload);
       }
       onSuccess();
       if (!editingId) {
-        setEntries([{ typeId: "", categoryId: "", width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }]);
+        setEntries([{
+          typeId: "",
+          categoryId: "",
+          width: "",
+          color: "",
+          degree: "",
+          lotNumber: "",
+          area: "",
+          length: "",
+          unit_price: "",
+          total: ""
+        }]);
         setCustomerMode("existing");
         setSelectedCustomerId("");
         setNewCustomerName("");
+        setTotalReceipt("");
       } else {
         onCancel();
       }
@@ -183,7 +253,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         </div>
       )}
 
-      {/* Customer selection (global) */}
+      {/* Customer selection */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <label className="block text-sm font-medium text-gray-700 mb-2">مشتری <span className="text-red-500">*</span></label>
         <div className="flex gap-4 mb-3">
@@ -222,6 +292,8 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">رنگ*</th>
                 <th className="p-2 border">درجه</th>
                 <th className="p-2 border">شماره لات*</th>
+                <th className="p-2 border">قیمت واحد (؋/م²)*</th>
+                <th className="p-2 border">مبلغ کل (محاسبه)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
             </thead>
@@ -268,6 +340,10 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                   <td className="p-2">
                     <input type="text" value={entry.lotNumber} onChange={(e) => handleEntryChange(idx, "lotNumber", e.target.value)} className="w-32 border rounded px-1 py-1" required />
                   </td>
+                  <td className="p-2">
+                    <input type="number" step="any" value={entry.unit_price} onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)} className="w-24 border rounded px-1 py-1" required />
+                  </td>
+                  <td className="p-2 text-gray-700 font-medium">{entry.total || "—"} ؋</td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
                       <FaMinusCircle />
@@ -277,6 +353,34 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Payment section (global) */}
+        <div className="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
+              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)} ؋</div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
+              <input
+                type="number"
+                step="any"
+                value={totalReceipt}
+                onChange={(e) => setTotalReceipt(e.target.value)}
+                className="w-full border rounded-lg px-3 py-2 text-lg"
+                placeholder="مبلغ دریافت شده"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
+              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)} ؋</div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            * مبلغ دریافتی به ترتیب (ردیف به ردیف) به اقلام فاکتور اختصاص می‌یابد تا تسویه شود.
+          </p>
         </div>
 
         <div className="flex justify-between items-center">
@@ -292,7 +396,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         </div>
         {!editingId && (
           <p className="text-xs text-gray-400 mt-3">
-            توجه: هر ردیف شامل نوع و دسته‌بندی مربوطه است. عرض و مساحت برای محاسبه طول استفاده می‌شود.
+            مبلغ کل هر کالا = مساحت × قیمت واحد (‌؋/م²). مجموع مبلغ دریافتی به‌طور خودکار بین کالاها (از اولین ردیف به ترتیب) توزیع می‌شود.
           </p>
         )}
       </form>

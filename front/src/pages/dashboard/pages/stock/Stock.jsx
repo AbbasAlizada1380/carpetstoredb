@@ -54,7 +54,7 @@ const Stock = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path>
                 </svg>
               </div>
-              <span className="text-sm md:text-base">ورود پلیت</span>
+              <span className="text-sm md:text-base">ورود  </span>
               {activeTab === "incoming" && (
                 <div className="absolute -bottom-1 left-0 right-0 h-1 bg-cyan-400 rounded-t-lg"></div>
               )}
@@ -91,7 +91,7 @@ const Stock = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
               </div>
-              <span className="text-sm md:text-base">موجودی پلیت</span>
+              <span className="text-sm md:text-base">موجودی  </span>
               {activeTab === "existed" && (
                 <div className="absolute -bottom-1 left-0 right-0 h-1 bg-green-400 rounded-t-lg"></div>
               )}

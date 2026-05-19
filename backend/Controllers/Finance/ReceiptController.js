@@ -21,30 +21,112 @@ export const createReceipt = async (req, res) => {
       return res.status(404).json({ message: "Buyer not found" });
     }
 
-    const receipt = await Receipt.create({
-      buyerId,
-      amountofmoney,
-      description: description || null,
-    });
-
-    // Update buyer account with this receipt ID
-    // We'll call the helper that adds receiptId
+    // 1. Get or create BuyerAccount
     let account = await BuyerAccount.findOne({ where: { buyerId } });
     if (!account) {
       account = await BuyerAccount.create({
         buyerId,
         sellIds: [],
         remaindIds: [],
+        receiptSaleIds: [],
         receiptIds: [],
       });
     }
-    const currentReceipts = account.receiptIds;
-    if (!currentReceipts.includes(receipt.id)) {
-      currentReceipts.push(receipt.id);
-      await account.update({ receiptIds: currentReceipts });
+
+    // 2. Get unpaid sell IDs (remaindIds)
+    let remaindIds = account.remaindIds || [];
+    if (remaindIds.length === 0) {
+      // No debt to clear – just create receipt and return
+      const receipt = await Receipt.create({
+        buyerId,
+        amountofmoney,
+        description: description || null,
+      });
+      let receiptIds = account.receiptIds || [];
+      if (!receiptIds.includes(receipt.id)) {
+        receiptIds.push(receipt.id);
+        await account.update({ receiptIds });
+      }
+      return res.status(201).json({
+        receipt,
+        updatedSells: [],
+        remaindIds: account.remaindIds,
+        message: "No outstanding sells to apply payment.",
+      });
     }
 
-    res.status(201).json(receipt);
+    // 3. Fetch unpaid sells in order (by id ascending)
+    const unpaidSells = await Sells.findAll({
+      where: { id: remaindIds },
+      order: [['id', 'ASC']],
+    });
+
+    let remainingAmount = parseFloat(amountofmoney);
+    let totalRemainingDebt = unpaidSells.reduce((sum, sell) => sum + parseFloat(sell.remaind), 0);
+
+    if (remainingAmount > totalRemainingDebt) {
+      return res.status(400).json({
+        message: `Payment amount (${remainingAmount}) exceeds total outstanding debt (${totalRemainingDebt}).`,
+      });
+    }
+
+    const updatedSells = [];
+    const fullyPaidIds = [];
+
+    // 4. Apply payment sequentially
+    for (const sell of unpaidSells) {
+      if (remainingAmount <= 0) break;
+
+      let currentRemaind = parseFloat(sell.remaind);
+      let currentReceipt = parseFloat(sell.receipt);
+      let amountToPay = Math.min(remainingAmount, currentRemaind);
+
+      // Update sell
+      sell.receipt = currentReceipt + amountToPay;
+      sell.remaind = currentRemaind - amountToPay;
+      await sell.save();
+
+      updatedSells.push(sell);
+      remainingAmount -= amountToPay;
+
+      // If fully paid, mark for moving
+      if (sell.remaind === 0) {
+        fullyPaidIds.push(sell.id);
+      }
+    }
+
+    // 5. Update BuyerAccount arrays
+    let newRemaindIds = remaindIds.filter(id => !fullyPaidIds.includes(id));
+    let receiptSaleIds = account.receiptSaleIds || [];
+    for (let id of fullyPaidIds) {
+      if (!receiptSaleIds.includes(id)) {
+        receiptSaleIds.push(id);
+      }
+    }
+
+    // Also add the receipt ID itself
+    const receipt = await Receipt.create({
+      buyerId,
+      amountofmoney,
+      description: description || null,
+    });
+    let receiptIds = account.receiptIds || [];
+    if (!receiptIds.includes(receipt.id)) {
+      receiptIds.push(receipt.id);
+    }
+
+    await account.update({
+      remaindIds: newRemaindIds,
+      receiptSaleIds,
+      receiptIds,
+    });
+
+    // 6. Return the updated data
+    res.status(201).json({
+      receipt,
+      updatedSells,
+      remaindIds: newRemaindIds,          // the updated remaindIds array
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error creating receipt", error: error.message });

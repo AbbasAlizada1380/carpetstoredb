@@ -83,6 +83,11 @@ const Sidebar = ({ setActiveComponent }) => {
       value: "customer",
       icon: <MdFactory />,
     },
+        {
+      name: "پرداخت",
+      value: "pay",
+      icon: <MdFactory />,
+    },
     {
       name: "مصارف",
       value: "ExpenseManager",

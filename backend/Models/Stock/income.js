@@ -37,11 +37,20 @@ const Income = sequelize.define(
       allowNull: true,
       comment: "Total area (width × length, pre-computed if needed)",
     },
+
+    unit_price: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
     length: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
       comment: "Length of the carpet",
-    }, 
+    },
     Sells: {
       type: DataTypes.JSON,
       allowNull: true,
