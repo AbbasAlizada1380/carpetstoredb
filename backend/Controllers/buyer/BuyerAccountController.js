@@ -1,5 +1,8 @@
 // Controllers/accounting/BuyerAccountController.js
 import { BuyerAccount, Buyer } from "../../Models/index.js";
+import { Op } from "sequelize";
+import sequelize from "../../dbconnection.js";
+import { Bill } from "../../Models/index.js"; // ensure Bill is imported
 
 /* ===========================
    Get or create buyer account
@@ -174,5 +177,64 @@ export const removeReceiptFromAccount = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error removing receipt", error: error.message });
+  }
+};
+
+// Controllers/accounting/BuyerAccountController.js (add at the end)
+
+
+/* ===========================
+   Get all buyers with unpaid bills (has_remaindIds = true)
+   Returns format: { success: true, data: [...], total: overallDue }
+=========================== */
+export const getBuyersWithUnpaid = async (req, res) => {
+  try {
+    // Find all BuyerAccounts where has_remaindIds is true
+    const accounts = await BuyerAccount.findAll({
+      where: { has_remaindIds: true },
+      include: [{ model: Buyer, as: "buyer" }],
+    });
+
+    const result = [];
+    let totalOverallDue = 0;
+
+    for (const account of accounts) {
+      const remaindIds = account.remaindIds || [];
+      if (remaindIds.length === 0) continue; // safety
+
+      // Fetch all bills whose IDs are in remaindIds
+      const bills = await Bill.findAll({
+        where: { id: remaindIds },
+        attributes: ['id', 'remainingAmount'],
+      });
+
+      let totalDue = 0;
+      const details = [];
+      for (const bill of bills) {
+        const remaining = parseFloat(bill.remainingAmount) || 0;
+        totalDue += remaining;
+        details.push({ billId: bill.id, remaining });
+      }
+
+      totalOverallDue += totalDue;
+
+      result.push({
+        customer: {   // naming matches frontend expectation (customer)
+          id: account.buyer.id,
+          fullname: account.buyer.fullname,
+        },
+        total_due: totalDue,
+        details,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result,
+      total: totalOverallDue,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error fetching buyers with unpaid", error: error.message });
   }
 };

@@ -1,3 +1,4 @@
+// Routes/BuyerAccountRoute.js
 import express from "express";
 import {
   getOrCreateBuyerAccount,
@@ -6,13 +7,19 @@ import {
   addReceiptToAccount,
   removeSellFromAccount,
   removeReceiptFromAccount,
-} from "../../Controllers/Buyer/BuyerAccountController.js";
+  getBuyersWithUnpaid,          // 👈 new controller
+} from "../../Controllers/buyer/BuyerAccountController.js";
 
 const BuyerAccountRoute = express.Router();
 
-// Buyer Account routes
+// ✅ Specific route must come BEFORE the parameterized route
+BuyerAccountRoute.get("/unpaid", getBuyersWithUnpaid);
+
+// 🟡 Generic parameterized route (catches /:buyerId)
 BuyerAccountRoute.get("/:buyerId", getOrCreateBuyerAccount);
 BuyerAccountRoute.get("/", getAllBuyerAccounts);
+
+// Other routes
 BuyerAccountRoute.post("/add-sell", addSellToAccount);
 BuyerAccountRoute.post("/add-receipt", addReceiptToAccount);
 BuyerAccountRoute.delete("/remove-sell", removeSellFromAccount);

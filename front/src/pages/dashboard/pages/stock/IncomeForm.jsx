@@ -30,7 +30,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   const [categoriesMap, setCategoriesMap] = useState({});
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState("");
-  
+
   // Global payment state
   const [totalReceipt, setTotalReceipt] = useState("");
 
@@ -89,14 +89,14 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       newEntries[index].categoryId = "";
       fetchCategoriesForType(value);
     }
-    
+
     // Recalculate length and total when width, area, or unit_price changes
     if (["width", "area", "unit_price"].includes(field)) {
       const { length, total } = calculateEntryValues(newEntries[index]);
       newEntries[index].length = length;
       newEntries[index].total = total;
     }
-    
+
     setEntries(newEntries);
   };
 
@@ -354,7 +354,17 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
             </tbody>
           </table>
         </div>
-
+        <div className="flex justify-between items-center">
+          <button type="button" onClick={addEntry} className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
+            <FaPlusCircle /> افزودن ردیف جدید
+          </button>
+          <div className="flex gap-3">
+            {onCancel && <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">انصراف</button>}
+            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-primary text-white rounded-lg shadow-md flex items-center gap-2">
+              {submitLoading ? <><FaSpinner className="animate-spin" />در حال ذخیره...</> : <><FaSave />{editingId ? "به‌روزرسانی" : "ذخیره همه"}</>}
+            </button>
+          </div>
+        </div>
         {/* Payment section (global) */}
         <div className="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -383,22 +393,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           </p>
         </div>
 
-        <div className="flex justify-between items-center">
-          <button type="button" onClick={addEntry} className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800">
-            <FaPlusCircle /> افزودن ردیف جدید
-          </button>
-          <div className="flex gap-3">
-            {onCancel && <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">انصراف</button>}
-            <button type="submit" disabled={submitLoading} className="px-5 py-2 bg-primary text-white rounded-lg shadow-md flex items-center gap-2">
-              {submitLoading ? <><FaSpinner className="animate-spin" />در حال ذخیره...</> : <><FaSave />{editingId ? "به‌روزرسانی" : "ذخیره همه"}</>}
-            </button>
-          </div>
-        </div>
-        {!editingId && (
-          <p className="text-xs text-gray-400 mt-3">
-            مبلغ کل هر کالا = مساحت × قیمت واحد (‌؋/م²). مجموع مبلغ دریافتی به‌طور خودکار بین کالاها (از اولین ردیف به ترتیب) توزیع می‌شود.
-          </p>
-        )}
+
       </form>
     </div>
   );

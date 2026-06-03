@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaSpinner, FaSave, FaEdit, FaTrash, FaTimes, FaExclamationTriangle, FaUserCheck, FaListAlt, FaChevronDown, FaChevronUp } from "react-icons/fa";
-import Pagination from "../../pagination/Pagination";
-import ReceiptReportsDownload from "../report/ReceiptReportsDownload";
+import Pagination from "../pagination/Pagination";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const RECEIPT_API = `${BASE_URL}/receipt`;
@@ -209,7 +208,6 @@ const ReceiptManager = () => {
       ) : (
         <>
           <div className="overflow-x-auto">
-           < ReceiptReportsDownload/>
             <table className="min-w-full border">
               <thead className="bg-gray-100">
                 <tr>

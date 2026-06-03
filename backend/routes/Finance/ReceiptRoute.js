@@ -2,18 +2,16 @@ import express from "express";
 import {
   createReceipt,
   getAllReceipts,
-  getReceiptsByBuyer,
   updateReceipt,
   deleteReceipt,
+  getReceiptsFiltered,     // 👈 import the new controller
 } from "../../Controllers/Finance/ReceiptController.js";
-
 
 const ReceiptRoute = express.Router();
 
-// Receipt routes
 ReceiptRoute.post("/", createReceipt);
 ReceiptRoute.get("/", getAllReceipts);
-ReceiptRoute.get("/buyer/:buyerId", getReceiptsByBuyer);
+ReceiptRoute.get("/filter", getReceiptsFiltered);   // 👈 new filtering route
 ReceiptRoute.put("/:id", updateReceipt);
 ReceiptRoute.delete("/:id", deleteReceipt);
 

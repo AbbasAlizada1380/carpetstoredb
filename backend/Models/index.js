@@ -5,7 +5,7 @@ import Sells from "./Stock/Sells.js";
 import Income from "./Stock/income.js";
 import Buyer from "./buyer/buyer.js";
 import BuyerAccount from "./buyer/BuyerAccount.js";
-import Receipt from "./Finance/Pay.js";
+import Receipt from "./Finance/Receipt.js";
 import Bill from "./bill/Bill.js";
 import Customer from "./customer/Customers.js";
 import CustomerAccount from "./customer/CustomerAccount.js";

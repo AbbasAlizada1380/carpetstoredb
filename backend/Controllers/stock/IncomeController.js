@@ -1,7 +1,5 @@
 // Controllers/stock/IncomeController.js
-import Customer from "../../Models/customer/Customers.js";
-import CustomerAccount from "../../Models/customer/CustomerAccount.js";
-import { IncomeBill } from "../../Models/index.js";
+import { IncomeBill, Pay, CustomerAccount, Customer } from "../../Models/index.js";
 import { Income, Type, Category } from "../../Models/index.js";
 import sequelize from "../../dbconnection.js";
 
@@ -10,11 +8,14 @@ const calculateLength = (area, width) => {
   return area / width;
 };
 
-// ---------- NEW: Update customer account with BILL ID (not income IDs) ----------
+// Update customer account with BILL ID using safe JSON operations
 const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) => {
+  const db = CustomerAccount.sequelize;
+  
+  // Ensure account exists
   let account = await CustomerAccount.findOne({ where: { customerId } });
   if (!account) {
-    account = await CustomerAccount.create({
+    await CustomerAccount.create({
       customerId,
       paid: [],
       unpaid: [],
@@ -25,36 +26,79 @@ const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) =>
     });
   }
 
-  const addToArray = (arr, id) => (arr.includes(id) ? arr : [...arr, id]);
-  const removeFromArray = (arr, id) => arr.filter(item => item !== id);
-
-  let total = account.total || [];
-  let paid = account.paid || [];
-  let unpaid = account.unpaid || [];
-
-  total = addToArray(total, billId);
+  // Always add billId to total array
+  await db.query(
+    `UPDATE CustomerAccounts 
+     SET total = JSON_ARRAY_APPEND(COALESCE(total, JSON_ARRAY()), '$', :billId)
+     WHERE customerId = :customerId`,
+    { replacements: { billId, customerId }, type: db.QueryTypes.UPDATE }
+  );
 
   if (isFullyPaid) {
-    paid = addToArray(paid, billId);
-    unpaid = removeFromArray(unpaid, billId);
+    // Add to paid, remove from unpaid only if exists
+    await db.query(
+      `UPDATE CustomerAccounts 
+       SET paid = JSON_ARRAY_APPEND(COALESCE(paid, JSON_ARRAY()), '$', :billId),
+           unpaid = IF(
+               JSON_SEARCH(COALESCE(unpaid, JSON_ARRAY()), 'one', :billId) IS NOT NULL,
+               JSON_REMOVE(COALESCE(unpaid, JSON_ARRAY()), JSON_UNQUOTE(JSON_SEARCH(COALESCE(unpaid, JSON_ARRAY()), 'one', :billId))),
+               COALESCE(unpaid, JSON_ARRAY())
+           )
+       WHERE customerId = :customerId`,
+      { replacements: { billId, customerId }, type: db.QueryTypes.UPDATE }
+    );
   } else {
-    unpaid = addToArray(unpaid, billId);
-    paid = removeFromArray(paid, billId);
+    // Add to unpaid, remove from paid only if exists
+    await db.query(
+      `UPDATE CustomerAccounts 
+       SET unpaid = JSON_ARRAY_APPEND(COALESCE(unpaid, JSON_ARRAY()), '$', :billId),
+           paid = IF(
+               JSON_SEARCH(COALESCE(paid, JSON_ARRAY()), 'one', :billId) IS NOT NULL,
+               JSON_REMOVE(COALESCE(paid, JSON_ARRAY()), JSON_UNQUOTE(JSON_SEARCH(COALESCE(paid, JSON_ARRAY()), 'one', :billId))),
+               COALESCE(paid, JSON_ARRAY())
+           )
+       WHERE customerId = :customerId`,
+      { replacements: { billId, customerId }, type: db.QueryTypes.UPDATE }
+    );
   }
-
-  await account.update({ total, paid, unpaid });
-  return account;
 };
 
-// Add income ID to Category.EIncome (unchanged)
+// Add Pay ID to customer account's pay array using raw SQL
+const addPayToCustomerAccount = async (customerId, payId) => {
+  const db = CustomerAccount.sequelize;
+  
+  // Ensure account exists
+  let account = await CustomerAccount.findOne({ where: { customerId } });
+  if (!account) {
+    await CustomerAccount.create({
+      customerId,
+      paid: [],
+      unpaid: [],
+      total: [],
+      returned: [],
+      pay: [],
+      receive: [],
+    });
+  }
+
+  // Append payId to pay array
+  await db.query(
+    `UPDATE CustomerAccounts 
+     SET pay = JSON_ARRAY_APPEND(COALESCE(pay, JSON_ARRAY()), '$', :payId)
+     WHERE customerId = :customerId`,
+    { replacements: { payId, customerId }, type: db.QueryTypes.UPDATE }
+  );
+};
+
+// Add income ID to Category.EIncome (already uses raw SQL, keep as is)
 const addIncomeToCategoryEIncome = async (categoryId, incomeId) => {
   if (!categoryId || !incomeId) return;
-  const sequelize = Category.sequelize;
-  await sequelize.query(
+  const db = Category.sequelize;
+  await db.query(
     `UPDATE Categories 
      SET EIncome = JSON_ARRAY_APPEND(COALESCE(EIncome, JSON_ARRAY()), '$', :incomeId) 
      WHERE id = :categoryId`,
-    { replacements: { categoryId, incomeId }, type: sequelize.QueryTypes.UPDATE }
+    { replacements: { categoryId, incomeId }, type: db.QueryTypes.UPDATE }
   );
 };
 
@@ -99,8 +143,11 @@ export const createIncome = async (req, res) => {
         const newCust = await Customer.create({ fullname: newCustomer.trim(), isActive: false }, { transaction });
         finalCustomerId = newCust.id;
       }
-    } else throw new Error("Either customerId or newCustomer is required");
+    } else {
+      throw new Error("Either customerId or newCustomer is required");
+    }
 
+    // ----- Create incomes -----
     const createdIncomes = [];
     const lotNumbersSet = new Set();
 
@@ -108,6 +155,7 @@ export const createIncome = async (req, res) => {
       const inc = incomes[i];
       const { typeId, categoryId, width, color, degree, lotNumber, area, unit_price, amount } = inc;
 
+      // Validation (unchanged)
       if (!typeId) throw new Error(`Income ${i + 1}: Type ID is required`);
       if (!categoryId) throw new Error(`Income ${i + 1}: Category ID is required`);
       if (!width || parseFloat(width) <= 0) throw new Error(`Income ${i + 1}: Width must be a positive number`);
@@ -159,7 +207,7 @@ export const createIncome = async (req, res) => {
     await transaction.commit();
     transaction = null;
 
-    // ----- Apply payment sequentially to incomes -----
+    // ----- Apply payment to incomes (update remaind & paidAmount) -----
     let remainingReceipt = parseFloat(totalReceipt) || 0;
     const totalInvoiceAmount = createdIncomes.reduce((sum, inc) => sum + parseFloat(inc.amount), 0);
 
@@ -167,22 +215,18 @@ export const createIncome = async (req, res) => {
       return res.status(400).json({ message: "Payment amount exceeds total invoice amount" });
     }
 
-    const fullyPaidIds = [];
     const sortedIncomes = [...createdIncomes].sort((a, b) => a.id - b.id);
-
     for (const income of sortedIncomes) {
       if (remainingReceipt <= 0) break;
       const currentRemaind = parseFloat(income.remaind);
       const amountToPay = Math.min(remainingReceipt, currentRemaind);
       const newPaidAmount = parseFloat(income.paidAmount) + amountToPay;
       const newRemaind = currentRemaind - amountToPay;
-
       await income.update({ paidAmount: newPaidAmount, remaind: newRemaind });
       remainingReceipt -= amountToPay;
-      if (newRemaind === 0) fullyPaidIds.push(income.id);
     }
 
-    // ----- Update Category.EIncome (income‑level, stays as before) -----
+    // ----- Update Category.EIncome (append income IDs) -----
     for (const income of createdIncomes) {
       await addIncomeToCategoryEIncome(income.categoryId, income.id);
     }
@@ -209,11 +253,23 @@ export const createIncome = async (req, res) => {
       Incomes: createdIncomes.map(i => i.id),
     });
 
-    // ----- Update CustomerAccount with the BILL ID (single call) -----
+    // ----- Create Pay record if payment was received, and add its ID to CustomerAccount.pay -----
+    let newPay = null;
+    if (totalPaid > 0) {
+      newPay = await Pay.create({
+        customerId: finalCustomerId,
+        amountofmoney: totalPaid,
+        description: `پرداخت بابت فاکتور ${billNumber}`,
+      });
+      // This will now work reliably using raw SQL
+      await addPayToCustomerAccount(finalCustomerId, newPay.id);
+    }
+
+    // ----- Update CustomerAccount with the BILL ID (paid/unpaid/total arrays) -----
     const isBillFullyPaid = (billStatus === 'paid');
     await updateCustomerAccountWithBill(finalCustomerId, newBill.id, isBillFullyPaid);
 
-    // ----- Response -----
+    // ----- Fetch detailed incomes for response -----
     const incomesWithDetails = await Income.findAll({
       where: { id: createdIncomes.map(i => i.id) },
       include: [
@@ -227,10 +283,11 @@ export const createIncome = async (req, res) => {
       message: `${createdIncomes.length} income(s) created successfully`,
       incomes: incomesWithDetails,
       bill: newBill,
+      pay: newPay,
     });
   } catch (error) {
     if (transaction) await transaction.rollback();
-    console.error(error);
+    console.error("Error in createIncome:", error);
     res.status(500).json({ error: error.message });
   }
 };

@@ -14,13 +14,13 @@ const BuyerAccount = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "Buyers", // assumes your Buyer model table name
+        model: "Buyers",
         key: "id",
       },
       comment: "Reference to the buyer",
     },
     sellIds: {
-      type: DataTypes.TEXT, // store as JSON array or comma-separated
+      type: DataTypes.TEXT,
       allowNull: true,
       defaultValue: "[]",
       get() {
@@ -70,6 +70,13 @@ const BuyerAccount = sequelize.define(
         this.setDataValue("receiptIds", JSON.stringify(value));
       },
       comment: "Array of Receipt record IDs",
+    },
+    // NEW: Boolean flag for non‑empty remaindIds
+    has_remaindIds: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "Indicates whether remaindIds is non‑empty (for fast indexing)",
     },
   },
   {

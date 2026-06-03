@@ -42,35 +42,43 @@ const getOrCreateBuyer = async (buyerId, newBuyerName) => {
   throw new Error("Either buyerId or newBuyer is required");
 };
 
-const addSellToBuyerAccount = async (buyerId, sellId, remaindAmount) => {
+// UPDATED: Add bill ID to BuyerAccount and manage has_remaindIds
+const addBillToBuyerAccount = async (buyerId, billId, isFullyPaid) => {
   let account = await BuyerAccount.findOne({ where: { buyerId } });
   if (!account) {
     account = await BuyerAccount.create({
       buyerId,
-      sellIds: [],
-      remaindIds: [],
-      receiptSaleIds: [],
-      receiptIds: [],
+      sellIds: [],          // now stores bill IDs
+      remaindIds: [],       // stores unpaid/partial bill IDs
+      receiptSaleIds: [],   // stores fully paid bill IDs
+      receiptIds: [],       // stores receipt IDs (unchanged)
+      has_remaindIds: false,
     });
   }
 
   let sellIds = account.sellIds || [];
-  if (!sellIds.includes(sellId)) {
-    sellIds.push(sellId);
-  }
+  if (!sellIds.includes(billId)) sellIds.push(billId);
 
   let receiptSaleIds = account.receiptSaleIds || [];
   let remaindIds = account.remaindIds || [];
 
-  if (remaindAmount === 0) {
-    if (!receiptSaleIds.includes(sellId)) receiptSaleIds.push(sellId);
-    remaindIds = remaindIds.filter(id => id !== sellId);
+  if (isFullyPaid) {
+    if (!receiptSaleIds.includes(billId)) receiptSaleIds.push(billId);
+    remaindIds = remaindIds.filter(id => id !== billId);
   } else {
-    if (!remaindIds.includes(sellId)) remaindIds.push(sellId);
-    receiptSaleIds = receiptSaleIds.filter(id => id !== sellId);
+    if (!remaindIds.includes(billId)) remaindIds.push(billId);
+    receiptSaleIds = receiptSaleIds.filter(id => id !== billId);
   }
 
-  await account.update({ sellIds, remaindIds, receiptSaleIds });
+  // Set has_remaindIds based on the new remaindIds array
+  const hasRemaind = remaindIds.length > 0;
+
+  await account.update({
+    sellIds,
+    remaindIds,
+    receiptSaleIds,
+    has_remaindIds: hasRemaind,
+  });
   return account;
 };
 
@@ -79,7 +87,7 @@ const createReceiptAndLink = async (buyerId, amount, description = "") => {
   const receipt = await Receipt.create({
     buyerId,
     amountofmoney: amount,
-    description: description || `پرداخت برای فروش`,
+    description: description || `رسید برای فروش`,
   });
   let account = await BuyerAccount.findOne({ where: { buyerId } });
   if (!account) {
@@ -89,6 +97,7 @@ const createReceiptAndLink = async (buyerId, amount, description = "") => {
       remaindIds: [],
       receiptSaleIds: [],
       receiptIds: [],
+      has_remaindIds: false,
     });
   }
   let receiptIds = account.receiptIds || [];
@@ -229,13 +238,13 @@ export const createSell = async (req, res) => {
       totalAmountSum += amountNum;
       totalReceiptSum += receiptAmount;
 
+      // Update income's Sells array (still per-sell, not changed)
       let currentSells = income.Sells || [];
       if (!currentSells.includes(newSell.id)) {
         currentSells.push(newSell.id);
         await income.update({ Sells: currentSells });
       }
 
-      await addSellToBuyerAccount(finalBuyerId, newSell.id, finalRemaind);
       await syncSIncomeForType(typeId);
     }
 
@@ -260,6 +269,9 @@ export const createSell = async (req, res) => {
       discounted_amount: 0,
       sells: sellIds,
     });
+
+    // Add the BILL to BuyerAccount (instead of individual sells)
+    await addBillToBuyerAccount(finalBuyerId, newBill.id, status === 'paid');
 
     // Create ONE receipt for the total paid amount and capture it
     let createdReceipt = null;
@@ -289,7 +301,6 @@ export const createSell = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 export const getAllSells = async (req, res) => {
   try {
