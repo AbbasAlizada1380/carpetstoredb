@@ -256,3 +256,56 @@ export const deletePayment = async (req, res) => {
     res.status(500).json({ message: "Error deleting payment", error: error.message });
   }
 };
+
+// GET payments with filters (customerId, date range)
+export const getPaymentsFiltered = async (req, res) => {
+  try {
+    const { customerId, startDate, endDate, page = 1, limit = 20 } = req.query;
+
+    const where = {};
+
+    if (customerId) {
+      where.customerId = customerId;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setUTCHours(0, 0, 0, 0);
+        where.createdAt[Op.gte] = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setUTCHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const pageLimit = parseInt(limit);
+
+    const { count, rows: payments } = await Pay.findAndCountAll({
+      where,
+      include: [{ model: Customer, as: "customer" }],
+      order: [["createdAt", "DESC"]],
+      offset,
+      limit: pageLimit,
+    });
+
+    const totalPages = Math.ceil(count / pageLimit);
+
+    res.json({
+      data: payments,
+      pagination: {
+        totalItems: count,
+        totalPages,
+        currentPage: parseInt(page),
+        itemsPerPage: pageLimit,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error fetching filtered payments", error: error.message });
+  }
+};

@@ -1,4 +1,4 @@
-import { Category, Type,Income } from "../../Models/index.js";
+import { Category, Type, Income } from "../../Models/index.js";
 import { Op } from "sequelize";
 
 // Helper: Sync the categories JSON array of a Type based on its related Category records
@@ -191,7 +191,7 @@ export const getCategoryReports = async (req, res) => {
     });
 
     if (!categories.length) {
-      return res.status(200).json([]);
+      return res.status(200).json({ categories: [], totalStockValue: 0 });
     }
 
     // 2. Process only categories that have at least one existing income (EIncome not empty)
@@ -216,20 +216,38 @@ export const getCategoryReports = async (req, res) => {
             });
           }
 
-          // Return only what matters: category, its type, and its existing incomes
+          // Calculate total stock value for this category: sum of unit_price * area
+          const categoryStockValue = existingIncomes.reduce((sum, income) => {
+            const price = income.unit_price || 0;
+            const area = income.area || 0;
+            return sum + (price * area);
+          }, 0);
+
+          // Return category report with stock value summary
           return {
             id: category.id,
             name: category.name,
             type: category.type || null,
-            existingIncomes, // list of Income objects (each belongs to this category)
+            existingIncomes,
             summary: {
               totalExistingIncomes: existingIncomes.length,
+              totalStockValue: categoryStockValue,   // new per‑category total
             },
           };
         })
     );
 
-    res.status(200).json(reports);
+    // 3. Calculate overall total stock value across all categories
+    const overallTotalStockValue = reports.reduce(
+      (total, categoryReport) => total + (categoryReport.summary.totalStockValue || 0),
+      0
+    );
+
+    // 4. Send response with categories array and grand total
+    res.status(200).json({
+      categories: reports,
+      totalStockValue: overallTotalStockValue,
+    });
   } catch (error) {
     console.error("Error in getCategoryReports:", error);
     res.status(500).json({ error: error.message });

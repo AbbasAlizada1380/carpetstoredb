@@ -325,7 +325,6 @@ const CategoryManager = () => {
           </div>
         </div>
       )}
-    <CategoryReports/>
     </div>
   );
 };

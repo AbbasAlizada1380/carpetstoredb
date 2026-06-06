@@ -1,53 +1,39 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
-import SellForm from "./SellForm";
+import { FaEdit, FaTrash, FaSpinner, FaPlus, FaTimes, FaPrint } from "react-icons/fa";
 import Pagination from "../../pagination/Pagination";
+import SellForm from "./SellForm";
+import BillReportsDownload from "../report/BillReportsDownload";
+import SingleBillDownload from "../report/SingleBillDownload"; // new import
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
-const API_BASE_URL = `${BASE_URL}/sells`;
-const CATEGORY_API = `${BASE_URL}/category`; // adjust if needed
+const BILL_API = `${BASE_URL}/bill`;
 
 const SellManager = () => {
-  const [sells, setSells] = useState([]);
-  const [categories, setCategories] = useState([]); // for category name mapping
-  const [showForm, setShowForm] = useState(false);
-  const [editingSell, setEditingSell] = useState(null);
+  const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showForm, setShowForm] = useState(false);
 
-  // Pagination state
+  // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
-  // Fetch categories once for name mapping
-  const fetchCategories = async () => {
-    try {
-      const res = await axios.get(CATEGORY_API);
-      setCategories(res.data.categories || res.data);
-    } catch (err) {
-      console.error("Error loading categories:", err);
-    }
-  };
-
-  // Fetch sells with pagination
-  const fetchSells = async (page = currentPage, limit = itemsPerPage) => {
+  // Fetch bills with pagination
+  const fetchBills = async (page = currentPage, limit = itemsPerPage) => {
     setLoading(true);
     try {
-      const response = await axios.get(API_BASE_URL, {
-        params: { page, limit },
-      });
-      // Expected backend response: { data: [...], totalPages, currentPage, totalItems }
-      const { data, totalPages: totalPagesRes, currentPage: currentPageRes, totalItems: totalItemsRes } = response.data;
-      setSells(data);
-      setTotalPages(totalPagesRes);
-      setCurrentPage(currentPageRes);
-      setTotalItems(totalItemsRes);
+      const response = await axios.get(BILL_API, { params: { page, limit } });
+      const { bills: fetchedBills, pagination } = response.data;
+      setBills(fetchedBills || []);
+      setTotalItems(pagination.totalItems);
+      setTotalPages(pagination.totalPages);
+      setCurrentPage(pagination.currentPage);
       setError("");
     } catch (err) {
-      setError("بارگیری فروش‌ها ناکام ماند");
+      setError("بارگیری فاکتورها ناکام ماند");
       console.error(err);
     } finally {
       setLoading(false);
@@ -55,42 +41,35 @@ const SellManager = () => {
   };
 
   useEffect(() => {
-    fetchCategories();
-  }, []);
-
-  useEffect(() => {
-    fetchSells(currentPage, itemsPerPage);
+    fetchBills(currentPage, itemsPerPage);
   }, [currentPage, itemsPerPage]);
 
-  const handleEdit = (sell) => {
-    setEditingSell(sell);
-    setShowForm(true);
-  };
-
-  const handleFormSuccess = () => {
-    fetchSells(currentPage, itemsPerPage);
-    setShowForm(false);
-    setEditingSell(null);
-  };
-
-  const handleFormCancel = () => {
-    setShowForm(false);
-    setEditingSell(null);
+  const handleEdit = async (bill) => {
+    const newNotes = prompt("توضیحات / یادداشت جدید:", bill.notes || "");
+    if (newNotes === null) return;
+    setLoading(true);
+    try {
+      await axios.put(`${BILL_API}/${bill.id}`, { notes: newNotes.trim() || null });
+      fetchBills(currentPage, itemsPerPage);
+    } catch (err) {
+      setError(err.response?.data?.message || "ویرایش ناکام ماند");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm("آیا از حذف این فروش مطمئن هستید؟")) return;
+    if (!window.confirm("آیا از حذف این فاکتور مطمئن هستید؟")) return;
     setLoading(true);
     try {
-      await axios.delete(`${API_BASE_URL}/${id}`);
-      if (sells.length === 1 && currentPage > 1) {
+      await axios.delete(`${BILL_API}/${id}`);
+      if (bills.length === 1 && currentPage > 1) {
         setCurrentPage(currentPage - 1);
       } else {
-        fetchSells(currentPage, itemsPerPage);
+        fetchBills(currentPage, itemsPerPage);
       }
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
-      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -102,58 +81,126 @@ const SellManager = () => {
     }
   };
 
-  const getInitialEntries = () => {
-    if (editingSell) {
-      return [{
-        categoryId: editingSell.categoryId || "",
-        length: editingSell.length,
-        area: editingSell.area,
-        amount: editingSell.total,   // backend uses 'total', form expects 'amount'
-        unit_price: editingSell.unit_price,
-        receipt: editingSell.receipt,
-        remaind: editingSell.remaind,
-      }];
-    }
-    return [{
-      categoryId: "",
-      length: "",
-      area: "",
-      amount: "",
-      unit_price: "",
-      receipt: "",
-      remaind: ""
-    }];
+  const handleFormSuccess = () => {
+    setShowForm(false);
+    fetchBills(currentPage, itemsPerPage);
   };
 
-  // Helper to get category name from ID
-  const getCategoryName = (categoryId) => {
-    const cat = categories.find(c => c.id === categoryId);
-    return cat ? cat.name : `دسته ${categoryId}`;
+  const handleFormCancel = () => {
+    setShowForm(false);
+  };
+
+  const getStatusBadge = (status) => {
+    switch (status) {
+      case "paid":
+        return <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">پرداخت شده</span>;
+      case "partial":
+        return <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">پرداخت جزئی</span>;
+      default:
+        return <span className="bg-red-100 text-red-800 px-3 py-1 rounded-full text-sm font-medium">پرداخت نشده</span>;
+    }
+  };
+
+  // Function to print a single bill as PDF (simple version using window.print or a dedicated component)
+  const printSingleBill = (bill) => {
+    const printWindow = window.open("", "_blank");
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <title>فاکتور ${bill.billNumber}</title>
+        <style>
+          body { font-family: Tahoma, sans-serif; margin: 40px; background: #fff; }
+          .header { text-align: center; margin-bottom: 30px; }
+          .bill-details { border: 1px solid #ccc; padding: 20px; margin-bottom: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+          th { background-color: #f2f2f2; }
+          .total-row { font-weight: bold; background-color: #f9f9f9; }
+          @media print {
+            body { margin: 0; padding: 20px; }
+            .no-print { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h2>فاکتور فروش</h2>
+          <h3>شماره: ${bill.billNumber}</h3>
+        </div>
+        <div class="bill-details">
+          <p><strong>خریدار:</strong> ${bill.buyer?.fullname || "---"}</p>
+          <p><strong>تاریخ:</strong> ${new Date(bill.date).toLocaleDateString("fa-IR")}</p>
+          <p><strong>وضعیت:</strong> ${bill.status === "paid" ? "پرداخت شده" : bill.status === "partial" ? "پرداخت جزئی" : "پرداخت نشده"}</p>
+          <p><strong>یادداشت:</strong> ${bill.notes || "---"}</p>
+        </div>
+        <h4>اقلام فروش</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>ردیف</th>
+              <th>کد کالا</th>
+              <th>طول (متر)</th>
+              <th>مساحت (متر مربع)</th>
+              <th>قیمت واحد (؋)</th>
+              <th>مبلغ کل (؋)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(bill.sellRecords || []).map((sell, idx) => `
+              <tr>
+                <td>${idx + 1}</td>
+                <td>${sell.income?.lotNumber || sell.incomeId}</td>
+                <td>${sell.length}</td>
+                <td>${sell.area}</td>
+                <td>${sell.unit_price}</td>
+                <td>${sell.total}</td>
+              </tr>
+            `).join("")}
+            <tr class="total-row">
+              <td colspan="5">جمع کل</td>
+              <td>${bill.totalAmount}</td>
+            </tr>
+            <tr>
+              <td colspan="5">پرداخت شده</td>
+              <td>${bill.paidAmount}</td>
+            </tr>
+            <tr>
+              <td colspan="5">باقیمانده</td>
+              <td>${bill.remainingAmount}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="no-print" style="text-align: center; margin-top: 30px;">
+          <button onclick="window.print();">چاپ فاکتور</button>
+        </div>
+      </body>
+      </html>
+    `;
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6 space-y-8" dir="rtl">
       <div className="text-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت فروش</h1>
-        <p className="text-gray-600">ثبت، ویرایش و حذف فاکتورهای فروش (امکان ثبت چند ردیف همزمان)</p>
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت فاکتورهای فروش (بیل)</h1>
+        <p className="text-gray-600">مشاهده، ویرایش یادداشت و حذف فاکتورهای ثبت شده</p>
       </div>
 
-      {/* Toggle Form Button */}
       <div className="flex justify-center mb-6">
         {!showForm ? (
           <button
-            onClick={() => {
-              setEditingSell(null);
-              setShowForm(true);
-            }}
+            onClick={() => setShowForm(true)}
             className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-xl hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md flex items-center gap-2"
           >
             <FaPlus />
-            افزودن فروش جدید
+            ثبت فروش جدید
           </button>
         ) : (
           <button
-            onClick={handleFormCancel}
+            onClick={() => setShowForm(false)}
             className="px-6 py-3 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition font-medium shadow-md flex items-center gap-2"
           >
             <FaTimes />
@@ -165,24 +212,31 @@ const SellManager = () => {
       {error && (
         <div className="bg-red-50 border-r-4 border-red-500 text-red-700 p-4 rounded-lg shadow-sm mb-6">
           <div className="flex items-center gap-2">
-            <FaTimes className="text-red-500" />
+            <FaSpinner className="text-red-500" />
             <span>{error}</span>
           </div>
         </div>
       )}
 
-      {/* Inline Sell Form */}
       {showForm && (
         <SellForm
-          key={editingSell ? editingSell.id : "new"}
           onSuccess={handleFormSuccess}
           onCancel={handleFormCancel}
-          editingId={editingSell?.id || null}
-          initialEntries={getInitialEntries()}
+          editingId={null}
+          initialEntries={[{
+            typeId: "",
+            categoryId: "",
+            incomeId: "",
+            incomeWidth: "",
+            length: "",
+            area: "",
+            total: "",
+            unit_price: "",
+          }]}
         />
       )}
 
-      {/* Sells Table */}
+      {/* Bills Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
         <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -193,7 +247,7 @@ const SellManager = () => {
                 </svg>
               </div>
               <div>
-                <h2 className="text-xl font-bold">لیست فروش‌ها</h2>
+                <h2 className="text-xl font-bold">لیست فاکتورها</h2>
                 <p className="text-sm text-white/80">مدیریت تمام فاکتورهای فروش ثبت شده</p>
               </div>
             </div>
@@ -204,23 +258,25 @@ const SellManager = () => {
                   در حال بارگذاری...
                 </div>
               )}
+              {/* Reports download component */}
+              <BillReportsDownload />
             </div>
           </div>
         </div>
 
-        {loading && sells.length === 0 ? (
+        {loading && bills.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
             <FaSpinner className="text-4xl text-cyan-800 animate-spin mb-4" />
-            <p className="text-gray-600">در حال بارگذاری فروش‌ها...</p>
+            <p className="text-gray-600">در حال بارگذاری فاکتورها...</p>
           </div>
-        ) : sells.length === 0 ? (
+        ) : bills.length === 0 ? (
           <div className="text-center py-16">
             <div className="flex flex-col items-center">
               <svg className="w-16 h-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
-              <p className="text-gray-500 text-lg">هیچ فروشی ثبت نشده است</p>
-              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "افزودن فروش جدید" کلیک کنید</p>
+              <p className="text-gray-500 text-lg">هیچ فاکتوری ثبت نشده است</p>
+              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "ثبت فروش جدید" کلیک کنید</p>
             </div>
           </div>
         ) : (
@@ -229,64 +285,66 @@ const SellManager = () => {
               <table className="w-full text-center">
                 <thead className="bg-blue-50 text-cyan-800">
                   <tr>
-                    <th className="p-3 border-b font-semibold">شناسه</th>
-                    <th className="p-3 border-b font-semibold">دسته‌بندی</th>
-                    <th className="p-3 border-b font-semibold">مشتری</th>
-                    <th className="p-3 border-b font-semibold">طول (متر)</th>
-                    <th className="p-3 border-b font-semibold">مساحت (م²)</th>
-                    <th className="p-3 border-b font-semibold">قیمت واحد (؋)</th>
+                    <th className="p-3 border-b font-semibold">شماره فاکتور</th>
+                    <th className="p-3 border-b font-semibold">خریدار</th>
+                    <th className="p-3 border-b font-semibold">تاریخ</th>
                     <th className="p-3 border-b font-semibold">جمع کل (؋)</th>
-                    <th className="p-3 border-b font-semibold">دریافتی (؋)</th>
+                    <th className="p-3 border-b font-semibold">پرداخت شده (؋)</th>
                     <th className="p-3 border-b font-semibold">باقیمانده (؋)</th>
+                    <th className="p-3 border-b font-semibold">وضعیت</th>
+                    <th className="p-3 border-b font-semibold">یادداشت</th>
                     <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sells.map((sell) => (
-                    <tr key={sell.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                      <td className="p-3 text-gray-600">{sell.id}</td>
-                      <td className="p-3 font-medium text-gray-800">
-                        {getCategoryName(sell.categoryId)}
-                       </td>
-                      <td className="p-3 font-medium text-gray-800">
-                        {sell.buyer?.fullname || "—"}
-                      </td>
-                      <td className="p-3">{sell.length || "—"}</td>
-                      <td className="p-3">{sell.area || "—"}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(sell.unit_price)}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(sell.total)}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(sell.receipt)}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(sell.remaind)}</td>
+                  {bills.map((bill) => (
+                    <tr key={bill.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                      <td className="p-3 font-mono text-sm">{bill.billNumber}</td>
+                      <td className="p-3 font-medium text-gray-800">{bill.buyer?.fullname || "—"}</td>
+                      <td className="p-3 text-gray-600">{new Date(bill.date).toLocaleDateString("eng-en")}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.totalAmount)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.paidAmount)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.remainingAmount)}</td>
+                      <td className="p-3">{getStatusBadge(bill.status)}</td>
+                      <td className="p-3 max-w-xs truncate">{bill.notes || "—"}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleEdit(sell)}
+                          {/* <button
+                            onClick={() => handleEdit(bill)}
                             className="p-2 text-yellow-600 hover:bg-yellow-50 rounded-lg transition"
-                            title="ویرایش"
+                            title="ویرایش یادداشت"
                           >
                             <FaEdit />
-                          </button>
+                          </button> */}
                           <button
-                            onClick={() => handleDelete(sell.id)}
+                            onClick={() => handleDelete(bill.id)}
                             className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
                             title="حذف"
                           >
                             <FaTrash />
                           </button>
+                          {/* <button
+                            onClick={() => printSingleBill(bill)}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                            title="چاپ فاکتور"
+                          >
+                            <FaPrint />
+                          </button> */}
+                          <SingleBillDownload billId={bill.id} billNumber={bill.billNumber} />
                         </div>
-                       </td>
-                     </tr>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={handlePageChange}
-              />
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+            />
             <div className="text-center text-gray-500 text-sm py-2 border-t">
-              مجموع {totalItems} فروش | صفحه {currentPage} از {totalPages}
+              مجموع {totalItems} فاکتور | صفحه {currentPage} از {totalPages}
             </div>
           </>
         )}
