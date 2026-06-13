@@ -343,7 +343,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                   <td className="p-2">
                     <input type="number" step="any" value={entry.unit_price} onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)} className="w-24 border rounded px-1 py-1" required />
                   </td>
-                  <td className="p-2 text-gray-700 font-medium">{entry.total || "—"} ؋</td>
+                  <td className="p-2 text-gray-700 font-medium">{entry.total || "—"}دالر</td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
                       <FaMinusCircle />
@@ -370,7 +370,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
-              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)} ؋</div>
+              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)}دالر</div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
@@ -385,7 +385,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
-              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)} ؋</div>
+              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)}دالر</div>
             </div>
           </div>
           <p className="text-xs text-gray-500 mt-2">

@@ -26,11 +26,16 @@ const CombinedReportsDownload = () => {
     const params = new URLSearchParams();
     if (fromDate) params.append("startDate", fromDate);
     if (toDate) params.append("endDate", toDate);
+    // For expense and attendance we use "from" and "to" (different param names)
+    const expenseParams = new URLSearchParams();
+    if (fromDate) expenseParams.append("from", fromDate);
+    if (toDate) expenseParams.append("to", toDate);
 
     const paymentsPromise = axios.get(`${BASE_URL}/pay/filter?${params.toString()}`).then(res => res.data.data || []);
     const receiptsPromise = axios.get(`${BASE_URL}/receipt/filter?${params.toString()}`).then(res => res.data || []);
-    const expensesPromise = axios.get(`${BASE_URL}/expense/date_range`, { params: { from: fromDate, to: toDate } }).then(res => res.data.expenses || []);
-    const salariesPromise = axios.get(`${BASE_URL}/attendance/date-range`, { params: { from: fromDate, to: toDate } }).then(res => res.data.data || []);
+    const expensesPromise = axios.get(`${BASE_URL}/expense/date_range?${expenseParams.toString()}`).then(res => res.data.expenses || []);
+    const salariesPromise = axios.get(`${BASE_URL}/attendance/date-range?${expenseParams.toString()}`).then(res => res.data.data || []);
+    const otherIncomePromise = axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`).then(res => res.data.data || []);
     const categoryPromise = axios.get(`${BASE_URL}/category/reports`).then(res => {
       const apiData = res.data;
       if (apiData && typeof apiData === "object" && !Array.isArray(apiData)) {
@@ -44,14 +49,14 @@ const CombinedReportsDownload = () => {
       return { categories: [], totalStockValue: 0 };
     });
 
-    const [payments, receipts, expenses, salaries, categoryData] = await Promise.all([
-      paymentsPromise, receiptsPromise, expensesPromise, salariesPromise, categoryPromise
+    const [payments, receipts, expenses, salaries, otherIncomes, categoryData] = await Promise.all([
+      paymentsPromise, receiptsPromise, expensesPromise, salariesPromise, otherIncomePromise, categoryPromise
     ]);
 
-    return { payments, receipts, expenses, salaries, categoryData };
+    return { payments, receipts, expenses, salaries, otherIncomes, categoryData };
   };
 
-  // PDF generation using same style as working CategoryReportsDownload
+  // PDF generation
   const handlePDFDownload = async () => {
     if (!fromDate || !toDate) {
       alert("لطفاً بازه زمانی را انتخاب کنید");
@@ -60,13 +65,10 @@ const CombinedReportsDownload = () => {
 
     try {
       setLoading(true);
-      const { payments, receipts, expenses, salaries, categoryData } = await fetchAllData();
+      const { payments, receipts, expenses, salaries, otherIncomes, categoryData } = await fetchAllData();
 
-      // Use portrait orientation (matches working example)
       const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
       doc.setR2L(false);
-
-      // Add font
       doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
       doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
       doc.setFont("Vazirmatn");
@@ -74,7 +76,6 @@ const CombinedReportsDownload = () => {
       const today = moment().format("YYYY/MM/DD");
       const dateRangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
 
-      // Title
       doc.setFontSize(14);
       doc.text(
         `گزارش جامع (${dateRangeStr})`,
@@ -92,7 +93,6 @@ const CombinedReportsDownload = () => {
 
       let startY = 80;
 
-      // Helper to add section title
       const addSectionTitle = (title, y) => {
         doc.setFontSize(12);
         doc.setTextColor(40, 40, 40);
@@ -101,7 +101,7 @@ const CombinedReportsDownload = () => {
       };
 
       // 1. Payments
-      startY = addSectionTitle("1. گزارش پرداخت‌های مشتریان", startY);
+      startY = addSectionTitle(" گزارش پرداخت‌های مشتریان", startY);
       if (payments.length === 0) {
         doc.text("هیچ پرداختی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
         startY += 20;
@@ -131,7 +131,7 @@ const CombinedReportsDownload = () => {
       }
 
       // 2. Receipts
-      startY = addSectionTitle("2. گزارش رسیدهای خریداران", startY);
+      startY = addSectionTitle(" گزارش رسیدهای خریداران", startY);
       if (receipts.length === 0) {
         doc.text("هیچ رسیدی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
         startY += 20;
@@ -159,8 +159,37 @@ const CombinedReportsDownload = () => {
         startY += 20;
       }
 
-      // 3. Expenses
-      startY = addSectionTitle("3. گزارش هزینه‌ها", startY);
+      // 3. Other Income (NEW)
+      startY = addSectionTitle(" گزارش عایدهای متفرقه", startY);
+      if (otherIncomes.length === 0) {
+        doc.text("هیچ عاید متفرقه‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+        startY += 20;
+      } else {
+        const oiHeaders = [["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"]];
+        const oiBody = otherIncomes.map((inc, idx) => [
+          idx + 1,
+          inc.for,
+          parseFloat(inc.amount).toLocaleString("eng-en"),
+          inc.description || "-",
+          moment(inc.createdAt).format("YYYY/MM/DD HH:mm")
+        ]);
+        autoTable(doc, {
+          startY,
+          head: oiHeaders,
+          body: oiBody,
+          theme: "grid",
+          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+          margin: { left: 30, right: 30 }
+        });
+        startY = doc.lastAutoTable.finalY + 15;
+        const totalOther = otherIncomes.reduce((s, inc) => s + parseNumber(inc.amount), 0);
+        doc.text(`جمع عایدهای متفرقه: ${totalOther.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+        startY += 20;
+      }
+
+      // 4. Expenses
+      startY = addSectionTitle(" گزارش هزینه‌ها", startY);
       if (expenses.length === 0) {
         doc.text("هیچ هزینه‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
         startY += 20;
@@ -188,8 +217,8 @@ const CombinedReportsDownload = () => {
         startY += 20;
       }
 
-      // 4. Salaries (Attendance)
-      startY = addSectionTitle("4. گزارش حقوق و حاضری کارمندان", startY);
+      // 5. Salaries
+      startY = addSectionTitle(" گزارش حقوق و حاضری کارمندان", startY);
       if (salaries.length === 0) {
         doc.text("هیچ رکورد حاضری یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
         startY += 20;
@@ -219,8 +248,8 @@ const CombinedReportsDownload = () => {
         startY += 20;
       }
 
-      // 5. Inventory categories
-      startY = addSectionTitle("5. گزارش موجودی کالاها بر اساس دسته‌بندی", startY);
+      // 6. Inventory
+      startY = addSectionTitle(" گزارش موجودی کالاها بر اساس دسته‌بندی", startY);
       const { categories, totalStockValue } = categoryData;
       if (!categories.length) {
         doc.text("هیچ دسته‌بندی با کالای موجود یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
@@ -245,7 +274,7 @@ const CombinedReportsDownload = () => {
         doc.text(`ارزش کل موجودی: ${totalStockValue.toLocaleString()} دالر`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
       }
 
-      // Page numbers (same as working example)
+      // Page numbers
       const pageCount = doc.internal.getNumberOfPages();
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
@@ -264,7 +293,7 @@ const CombinedReportsDownload = () => {
     }
   };
 
-  // Excel export (unchanged, works correctly)
+  // Excel export
   const handleExcelDownload = async () => {
     if (!fromDate || !toDate) {
       alert("لطفاً بازه زمانی را انتخاب کنید");
@@ -273,17 +302,18 @@ const CombinedReportsDownload = () => {
 
     try {
       setLoading(true);
-      const { payments, receipts, expenses, salaries, categoryData } = await fetchAllData();
+      const { payments, receipts, expenses, salaries, otherIncomes, categoryData } = await fetchAllData();
       const { categories, totalStockValue } = categoryData;
 
       const workbook = XLSX.utils.book_new();
       const dateRangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
+      const today = moment().format("YYYY/MM/DD");
 
       const addSheet = (name, headers, rows, extraInfo = []) => {
         const sheetData = [
           [`گزارش جامع - ${name}`],
           [`بازه: ${dateRangeStr}`],
-          [`تاریخ تولید: ${moment().format("YYYY/MM/DD")}`],
+          [`تاریخ تولید: ${today}`],
           [],
           headers,
           ...rows,
@@ -293,22 +323,27 @@ const CombinedReportsDownload = () => {
         XLSX.utils.book_append_sheet(workbook, sheet, name.slice(0, 31));
       };
 
-      // Payments sheet
+      // 1. Payments
       const payRows = payments.map(p => [p.id, p.customer?.fullname || p.customerId, p.amountofmoney, p.description || "-", moment(p.createdAt).format("YYYY/MM/DD HH:mm")]);
       const payTotal = payments.reduce((s, p) => s + parseNumber(p.amountofmoney), 0);
       addSheet("پرداخت‌ها", ["ID", "مشتری", "مبلغ (؋)", "توضیحات", "تاریخ"], payRows, [["جمع کل", "", payTotal, "", ""]]);
 
-      // Receipts sheet
+      // 2. Receipts
       const recRows = receipts.map(r => [r.id, r.buyer?.fullname || r.buyerId, r.amountofmoney, r.description || "-", moment(r.createdAt).format("YYYY/MM/DD HH:mm")]);
       const recTotal = receipts.reduce((s, r) => s + parseNumber(r.amountofmoney), 0);
       addSheet("رسیدها", ["ID", "خریدار", "مبلغ (؋)", "توضیحات", "تاریخ"], recRows, [["جمع کل", "", recTotal, "", ""]]);
 
-      // Expenses sheet
+      // 3. Other Income (NEW)
+      const oiRows = otherIncomes.map((inc, idx) => [idx + 1, inc.for, inc.amount, inc.description || "-", moment(inc.createdAt).format("YYYY/MM/DD HH:mm")]);
+      const oiTotal = otherIncomes.reduce((s, inc) => s + parseNumber(inc.amount), 0);
+      addSheet("عایدهای متفرقه", ["ردیف", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"], oiRows, [["جمع کل", "", oiTotal, "", ""]]);
+
+      // 4. Expenses
       const expRows = expenses.map(e => [e.id, e.amount, e.purpose || "-", e.by || "-", moment(e.createdAt).format("YYYY/MM/DD HH:mm")]);
       const expTotal = expenses.reduce((s, e) => s + parseNumber(e.amount), 0);
       addSheet("هزینه‌ها", ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"], expRows, [["جمع کل", expTotal, "", "", ""]]);
 
-      // Salaries sheet
+      // 5. Salaries
       const salRows = salaries.map(s => [
         s.Staff?.name || "نامشخص",
         parseNumber(s.salary || 0),
@@ -328,7 +363,7 @@ const CombinedReportsDownload = () => {
         ["جمع پرداخت شده", totalPaid]
       ]);
 
-      // Inventory sheet
+      // 6. Inventory
       const catRows = categories.map(cat => [
         cat.name,
         cat.type?.name || "بدون نوع",

@@ -9,7 +9,6 @@ import VazirmatnTTF from "../../../../../public/ttf/Vazirmatn.js";
 
 moment.locale("en");
 const BASE_URL = import.meta.env.VITE_BASE_URL;
-
 const ReceiptReportsDownload = () => {
   const [loading, setLoading] = useState(false);
   const [buyerId, setBuyerId] = useState("");

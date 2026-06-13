@@ -58,23 +58,12 @@ const Sidebar = ({ setActiveComponent }) => {
       icon: <MdAddShoppingCart />,
     },
     {
-      name: " انواع فرش",
-      value: "type",
-      icon: <MdReceiptLong />,
-    },
-    {
-      name: "کتگوری ها",
-      value: "CategoryManager",
-      icon: <MdPeople />,
-    },
-
-    {
       name: "گدام",
       value: "Stock",
       icon: <MdInventory />,
     },
     {
-      name: "خریداران",
+      name: "مشتری",
       value: "buyer",
       icon: <MdAttachMoney />,
     },
@@ -84,12 +73,12 @@ const Sidebar = ({ setActiveComponent }) => {
       icon: <MdFactory />,
     },
     {
-      name: "پرداخت",
+      name: "قروض",
       value: "pay",
       icon: <MdFactory />,
     },
     {
-      name: "رسید",
+      name: "طلبات",
       value: "receipt",
       icon: <MdFactory />,
     },
@@ -104,8 +93,8 @@ const Sidebar = ({ setActiveComponent }) => {
       icon: <MdBadge />,
     },
     {
-      name: "معاشات",
-      value: "SalaryManagement",
+      name: "عواید متفرقه",
+      value: "otherincome",
       icon: <MdPayments />,
     },
     // {
@@ -171,7 +160,7 @@ const Sidebar = ({ setActiveComponent }) => {
           <img src="/logo.png" alt="Logo" className="h-8 w-8 rounded-full" />
         </div>
         <span className="text-lg font-semibold text-white whitespace-nowrap">
-          فرش گیسو
+          فرش کیسو
         </span>
       </header>
 

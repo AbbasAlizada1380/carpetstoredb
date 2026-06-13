@@ -1,0 +1,205 @@
+import React, { useState } from "react";
+import axios from "axios";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import moment from "moment-jalaali";
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
+import VazirmatnTTF from "../../../../../public/ttf/Vazirmatn.js";
+
+moment.locale("en");
+const BASE_URL = import.meta.env.VITE_BASE_URL;
+
+const OtherIncomeReportsDownload = () => {
+  const [loading, setLoading] = useState(false);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  const fetchOtherIncomes = async () => {
+    const params = new URLSearchParams();
+    if (startDate) params.append("startDate", startDate);
+    if (endDate) params.append("endDate", endDate);
+    params.append("limit", 10000);
+    const response = await axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`);
+    return response.data.data;
+  };
+
+const handlePDFDownload = async () => {
+  try {
+    setLoading(true);
+    const incomes = await fetchOtherIncomes();
+    if (!incomes || incomes.length === 0) {
+      alert("هیچ داده‌ای یافت نشد");
+      return;
+    }
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    doc.setR2L(false);
+    doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
+    doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
+    doc.setFont("Vazirmatn");
+
+    const today = moment().format("YYYY/MM/DD");
+    const filterDesc = [];
+    if (startDate) filterDesc.push(`از تاریخ: ${startDate}`);
+    if (endDate) filterDesc.push(`تا تاریخ: ${endDate}`);
+    const filterText = filterDesc.length ? ` - فیلتر: ${filterDesc.join(" - ")}` : "";
+
+    const title = `گزارش عایدهای متفرقه${filterText} (تاریخ: ${today})`;
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 40;
+    const maxWidth = pageWidth - margin * 2; // available width for text
+
+    // Split title into multiple lines if needed
+    const titleLines = doc.splitTextToSize(title, maxWidth);
+    doc.setFontSize(12);
+    let y = 40;
+    for (let i = 0; i < titleLines.length; i++) {
+      doc.text(titleLines[i], pageWidth - margin, y, { align: "right" });
+      y += 16;
+    }
+    const titleHeight = titleLines.length * 16;
+    const startY = y + 10; // start table 10pt after title
+
+    // Table headers
+    const headers = [["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"]];
+    const body = incomes.map((inc, idx) => [
+      idx + 1,
+      inc.for,
+      parseFloat(inc.amount).toLocaleString("eng-en"),
+      inc.description || "-",
+      moment(inc.createdAt).format("YYYY/MM/DD HH:mm"),
+    ]);
+
+    autoTable(doc, {
+      startY: startY,
+      head: headers,
+      body: body,
+      theme: "grid",
+      styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+      headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+      margin: { left: margin, right: margin },
+    });
+
+    const finalY = doc.lastAutoTable.finalY + 20;
+    const totalAmount = incomes.reduce((sum, inc) => sum + parseFloat(inc.amount), 0);
+    doc.setFontSize(10);
+    doc.text(
+      `تعداد عایدها: ${incomes.length} | جمع کل مبلغ: ${totalAmount.toLocaleString("eng-en")} ؋`,
+      pageWidth - margin,
+      finalY,
+      { align: "right" }
+    );
+
+    // Page numbers
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.text(`${i}/${pageCount}`, pageWidth - margin, doc.internal.pageSize.getHeight() - 30, { align: "right" });
+    }
+
+    doc.save(`other_incomes_${moment().format("YYYY-MM-DD")}.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert("خطا در دریافت یا ایجاد PDF");
+  } finally {
+    setLoading(false);
+  }
+};
+
+  const handleExcelDownload = async () => {
+    try {
+      setLoading(true);
+      const incomes = await fetchOtherIncomes();
+      if (!incomes || incomes.length === 0) {
+        alert("هیچ داده‌ای یافت نشد");
+        return;
+      }
+
+      const workbook = XLSX.utils.book_new();
+      const filterDesc = [];
+      if (startDate) filterDesc.push(`از تاریخ: ${startDate}`);
+      if (endDate) filterDesc.push(`تا تاریخ: ${endDate}`);
+      const filterText = filterDesc.join(" - ");
+
+      const summaryData = [
+        ["گزارش عایدهای متفرقه"],
+        ["تاریخ گزارش", moment().format("YYYY/MM/DD")],
+        ["فیلترها", filterText],
+        [],
+        ["ردیف", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت", "زمان ثبت"],
+      ];
+
+      incomes.forEach((inc, idx) => {
+        summaryData.push([
+          idx + 1,
+          inc.for,
+          inc.amount,
+          inc.description || "-",
+          moment(inc.createdAt).format("YYYY/MM/DD"),
+          moment(inc.createdAt).format("HH:mm:ss"),
+        ]);
+      });
+
+      const totalAmount = incomes.reduce((sum, inc) => sum + parseFloat(inc.amount), 0);
+      summaryData.push([], ["جمع کل", "", totalAmount.toLocaleString("fa-AF"), "", "", ""]);
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+      summarySheet["!cols"] = [{ wch: 8 }, { wch: 30 }, { wch: 15 }, { wch: 40 }, { wch: 15 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(workbook, summarySheet, "عایدهای متفرقه");
+
+      const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([excelBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      saveAs(blob, `other_incomes_${moment().format("YYYY-MM-DD")}.xlsx`);
+    } catch (err) {
+      console.error(err);
+      alert("خطا در دریافت یا ایجاد Excel");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex flex-wrap gap-4 items-end">
+        <div>
+          <label className="block text-sm font-medium">از تاریخ</label>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="border rounded px-3 py-2"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium">تا تاریخ</label>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="border rounded px-3 py-2"
+          />
+        </div>
+      </div>
+      <div className="flex gap-4">
+        <button
+          onClick={handlePDFDownload}
+          disabled={loading}
+          className="bg-cyan-800 text-white px-4 py-2 rounded"
+        >
+          {loading ? "در حال ساخت PDF..." : "دانلود PDF"}
+        </button>
+        <button
+          onClick={handleExcelDownload}
+          disabled={loading}
+          className="bg-green-700 text-white px-4 py-2 rounded"
+        >
+          {loading ? "در حال ساخت Excel..." : "دانلود Excel"}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default OtherIncomeReportsDownload;

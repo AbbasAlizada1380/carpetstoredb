@@ -16,17 +16,17 @@ const Signin = () => {
   const isActive = currentUser?.isActive;
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-cyan-800 p-4 relative overflow-hidden">
+    <div className="flex justify-center items-center min-h-screen bg-primary p-4 relative overflow-hidden">
       {/* Top-Right Light Effect */}
-      <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-cyan-400 via-transparent to-transparent rounded-full blur-3xl opacity-20 animate-pulse"></div>
+      <div className="absolute top-0 right-0 w-96 h-96 bg-primary rounded-full blur-3xl opacity-20 animate-pulse"></div>
 
       {/* Bottom-Left Light Effect */}
-      <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-cyan-400 via-transparent to-transparent rounded-full blur-3xl opacity-20 animate-pulse"></div>
+      <div className="absolute bottom-0 left-0 w-96 h-96 bg-primary via-transparent to-transparent rounded-full blur-3xl opacity-20 animate-pulse"></div>
 
       {/* Additional floating elements for depth */}
-      <div className="absolute top-20 right-20 w-32 h-32 bg-cyan-300 rounded-full blur-2xl opacity-10 animate-bounce"></div>
+      <div className="absolute top-20 right-20 w-32 h-32 bg-primary rounded-full blur-2xl opacity-10 animate-bounce"></div>
       <div
-        className="absolute bottom-20 left-20 w-32 h-32 bg-cyan-300 rounded-full blur-2xl opacity-10 animate-bounce"
+        className="absolute bottom-20 left-20 w-32 h-32 bg-primary rounded-full blur-2xl opacity-10 animate-bounce"
         style={{ animationDelay: "2s" }}
       ></div>
 
@@ -40,17 +40,17 @@ const Signin = () => {
             <div className="flex items-center justify-center gap-x-3">
               <div className="relative">
                 <img
-                  src="logo.png"
-                  alt="logo"
-                  className="h-14 w-14 rounded-full border-2 border-cyan-800 shadow-lg"
+                  src="/logo.png"   // change to your carpet store logo
+                  alt="Kisaw Carpet Store"
+                  className="h-14 w-14 rounded-full border-2 border-primary shadow-lg"
                 />
-                <div className="absolute -inset-1 bg-cyan-400 rounded-full blur opacity-30 animate-ping"></div>
+                <div className="absolute -inset-1 bg-primary rounded-full blur opacity-30 animate-ping"></div>
               </div>
-              <h1 className="text-3xl font-bold text-cyan-800 drop-shadow-sm">
-             غرب سی تی پی
+              <h1 className="text-3xl font-bold text-primary drop-shadow-sm">
+              فرش‌| کیسو
               </h1>
             </div>
-            <p className="text-gray-600 mt-2">لطفاً اطلاعات خود را وارد کنید</p>
+            <p className="text-gray-600 mt-2">به فروشگاه فرش کیسو خوش آمدید</p>
           </div>
 
           {/* Email Input */}
@@ -64,7 +64,7 @@ const Signin = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="example@email.com"
-                className="w-full px-4 py-3 pr-5 focus:outline-none rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-800 focus:border-cyan-800 transition-all duration-200 bg-gray-50 text-right hover:bg-white shadow-sm"
+                className="w-full px-4 py-3 pr-5 focus:outline-none rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary focus:border-primary transition-all duration-200 bg-gray-50 text-right hover:bg-white shadow-sm"
                 dir="rtl"
               />
               <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
@@ -96,7 +96,7 @@ const Signin = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-4 py-3 pr-5 focus:outline-none rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-800 focus:border-cyan-800 transition-all duration-200 bg-gray-50 text-right hover:bg-white shadow-sm"
+                className="w-full px-4 py-3 pr-5 focus:outline-none rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary focus:border-primary transition-all duration-200 bg-gray-50 text-right hover:bg-white shadow-sm"
                 dir="rtl"
               />
               <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
@@ -121,9 +121,8 @@ const Signin = () => {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-gradient-to-r from-cyan-800 to-cyan-700 text-white py-4 rounded-xl font-semibold text-lg transform hover:scale-105 hover:from-cyan-700 hover:to-cyan-600 transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none cursor-pointer relative overflow-hidden group"
+            className="w-full bg-primary text-white py-4 rounded-xl font-semibold text-lg transform hover:scale-105  transition-all duration-200 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none cursor-pointer relative overflow-hidden group"
           >
-            {/* Button shine effect */}
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 transform translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></div>
 
             {isLoading ? (
@@ -132,7 +131,7 @@ const Signin = () => {
                 <span>در حال وارد شدن...</span>
               </div>
             ) : (
-              <span className="relative z-10">وارد شدن</span>
+              <span className="relative z-10">ورود به حساب</span>
             )}
           </button>
 
@@ -180,14 +179,17 @@ const Signin = () => {
               </div>
             </div>
           )}
-          <a href="/forgot_password"> رمز عبور خود را فراموش کرده اید؟</a>
+          <a href="/forgot_password" className="text-black hover:text-primary text-sm">
+            رمز عبور خود را فراموش کرده‌اید؟
+          </a>
+
           {/* Footer */}
           <div className="text-center pt-4 border-t border-gray-100">
             <p className="text-gray-600 text-sm">
-                غرب سی تی پی - خدمات  با کیفیت
+              کیسو – نفیس‌ترین فرش‌ها
             </p>
             <p className="text-gray-500 text-xs mt-1">
-             Gharb ctp- high Quality  Services
+              Kisaw – Exquisite Carpets
             </p>
           </div>
         </form>
