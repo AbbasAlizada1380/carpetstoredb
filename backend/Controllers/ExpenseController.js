@@ -9,7 +9,7 @@ export const createExpense = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { purpose, by, amount, description } = req.body;
+    const { purpose, by, amount, description, isCalculated } = req.body;
 
     if (!purpose || !by || amount === undefined) {
       return res.status(400).json({
@@ -22,7 +22,13 @@ export const createExpense = async (req, res) => {
     }
 
     const expense = await Expense.create(
-      { purpose, by, amount: Number(amount), description },
+      {
+        purpose,
+        by,
+        amount: Number(amount),
+        description,
+        calculated: isCalculated || false, // 👈 store as boolean
+      },
       { transaction }
     );
 
@@ -102,7 +108,7 @@ export const updateExpense = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { purpose, by, amount, description } = req.body;
+    const { purpose, by, amount, description, isCalculated } = req.body;
 
     const expense = await Expense.findByPk(req.params.id, { transaction });
 
@@ -116,12 +122,14 @@ export const updateExpense = async (req, res) => {
       return res.status(400).json({ message: "Amount must be >= 0" });
     }
 
+    // ✅ Update all fields including 'calculated'
     await expense.update(
       {
         purpose: purpose ?? expense.purpose,
         by: by ?? expense.by,
         amount: amount !== undefined ? Number(amount) : expense.amount,
         description: description ?? expense.description,
+        calculated: isCalculated !== undefined ? isCalculated : expense.calculated,
       },
       { transaction }
     );
@@ -167,7 +175,9 @@ export const deleteExpense = async (req, res) => {
   }
 };
 
-
+/* ==============================
+   Get Expenses by Date Range
+================================ */
 /* ==============================
    Get Expenses by Date Range
 ================================ */
@@ -186,16 +196,37 @@ export const getExpensesByDateRange = async (req, res) => {
     const expenses = await Expense.findAll({
       where: {
         createdAt: {
-          [Op.between]: [fromDate, toDate], // <-- use Op here
+          [Op.between]: [fromDate, toDate],
         },
       },
       order: [["createdAt", "DESC"]],
     });
 
+    // ─── Split into calculated vs non-calculated ──────────────────────
+    const calculatedExpenses = expenses.filter(e => e.calculated === true);
+    const nonCalculatedExpenses = expenses.filter(e => e.calculated !== true); // null, undefined, false
+
+    const totalCalculated = calculatedExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+    const totalNonCalculated = nonCalculatedExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+    const totalAll = expenses.reduce((sum, e) => sum + Number(e.amount), 0);
+
     res.json({
+      // Keep original fields for backward compatibility
       expenses,
       totalCount: expenses.length,
-      totalAmount: expenses.reduce((sum, e) => sum + Number(e.amount), 0),
+      totalAmount: totalAll,
+
+      // ─── NEW: split groups ──────────────────────────────────────────
+      calculated: {
+        count: calculatedExpenses.length,
+        total: totalCalculated,
+        items: calculatedExpenses,
+      },
+      nonCalculated: {
+        count: nonCalculatedExpenses.length,
+        total: totalNonCalculated,
+        items: nonCalculatedExpenses,
+      },
     });
   } catch (error) {
     console.error(error);
