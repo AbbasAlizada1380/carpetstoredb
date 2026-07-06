@@ -1,4 +1,3 @@
-// Models/Finance/Pay.js
 import { DataTypes } from "sequelize";
 import sequelize from "../../dbconnection.js";
 
@@ -12,12 +11,12 @@ const Pay = sequelize.define(
     },
     customerId: {
       type: DataTypes.INTEGER,
-      allowNull: true,  // ✅ allows NULL when customer is deleted
+      allowNull: true,
       references: {
         model: "Customers",
         key: "id",
       },
-      onDelete: "SET NULL",  // explicit for clarity
+      onDelete: "SET NULL",
       onUpdate: "CASCADE",
       comment: "Reference to the customer who paid",
     },
@@ -31,6 +30,13 @@ const Pay = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
       comment: "Optional note or description",
+    },
+    // ─── NEW: Currency indicator ──────────────────────────────────────
+    is_Afs: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "True if amount is in Afghanis, False if in other currency (e.g., USD)",
     },
   },
   {
