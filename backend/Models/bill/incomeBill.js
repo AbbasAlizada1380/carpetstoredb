@@ -9,11 +9,11 @@ const IncomeBill = sequelize.define(
       allowNull: false,
       unique: true,
     },
-    customerId: {                     // ✅ single foreign key field
+    customerId: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "Customers",           // ✅ exact table name (plural, capital C)
+        model: "Customers",
         key: "id",
       },
     },
@@ -52,6 +52,14 @@ const IncomeBill = sequelize.define(
       type: DataTypes.JSON,
       allowNull: false,
       defaultValue: [],
+      comment: "Array of carpet income IDs or objects",
+    },
+    // ─── NEW: Blanket (Bincome) entries ──────────────────────────────
+    bIncome: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      comment: "Array of blanket income (Bincome) IDs or objects",
     },
   },
   {

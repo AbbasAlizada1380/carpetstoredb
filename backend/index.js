@@ -24,6 +24,9 @@ import BillRouter from "./routes/bill/BillRouter.js";
 import PayRouter from "./routes/Finance/PayRoute.js";
 import CustomeraccountRoute from "./routes/customer/Customeaccount.js";
 import otherIncomeRouter from "./routes/Finance/otherIncomeRouter.js";
+import bIncomeRoute from "./routes/Stock/bincomeRoute.js";
+import bExistRoute from "./routes/Stock/bExistRoute.js";
+import bsalesRouter from "./routes/Stock/BSalesRoute.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -34,7 +37,8 @@ const __dirname = dirname(__filename);
 // ✅ Configure CORS properly
 const allowedOrigins = [
   `${FRONT_URL}`, // React local dev
-  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://kisawcarpet.com",
 ];
 
 app.use(
@@ -87,10 +91,13 @@ app.use("/bill", BillRouter);
 app.use("/pay", PayRouter);
 app.use("/customeraccount", CustomeraccountRoute);
 app.use("/other-incomes", otherIncomeRouter);
+app.use("/bincome", bIncomeRoute)
+app.use("/bexist", bExistRoute)
+app.use("/bsales", bsalesRouter)
 
 // Sync database and start server
 sequelize
-  .sync({ alter: true })
+  .sync({ alter: false })
   .then(() => {
     app.listen(port, () => {
       console.log(`✅ Server is running on port ${port}`);

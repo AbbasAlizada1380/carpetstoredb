@@ -3,8 +3,10 @@ import Outgoing from "../Outgoing";
 import ExistingStock from "../ExistingStock";
 import IncomeManager from "./IncomeManager";
 import CategoryReports from "./grouping/CategoryReports";
-import CategoryManager from "./grouping/CategoryManager";   // adjust import path as needed
-import TypeManager from "./grouping/TypeManager";        
+import CategoryManager from "./grouping/CategoryManager";
+import TypeManager from "./grouping/TypeManager";
+import Customers from "../Customers";          // adjust path as needed
+import BincomeManager from "./BincomeManager";         // adjust path as needed
 
 const Stock = () => {
   const [activeTab, setActiveTab] = useState("incoming");
@@ -23,7 +25,7 @@ const Stock = () => {
               </div>
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold text-white">مدیریت موجودی انبار</h1>
-                <p className="text-cyan-100 mt-1 text-sm md:text-base">مدیریت ورود، خروج و موجودی فعلی پلیت‌ها</p>
+                <p className="text-cyan-100 mt-1 text-sm md:text-base">مدیریت ورود، خروج و موجودی فعلی فرش ها</p>
               </div>
             </div>
             <div className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-4 py-2 rounded-full">
@@ -35,7 +37,7 @@ const Stock = () => {
 
         {/* Navigation Tabs */}
         <div className="px-6 pt-6 pb-2">
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-wrap gap-3">
             {/* ورود پلیت */}
             <button
               className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
@@ -50,10 +52,27 @@ const Stock = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path>
                 </svg>
               </div>
-              <span className="text-sm md:text-base">ورود پلیت</span>
+              <span className="text-sm md:text-base">ورودی فرش</span>
             </button>
 
-            {/* دسته‌بندی‌ها (Categories) */}
+            {/* ورودی کمپل (BLANKET) */}
+            <button
+              className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
+                activeTab === "bincome"
+                  ? "bg-gradient-to-r from-cyan-600 to-cyan-500 text-white shadow-lg shadow-cyan-100"
+                  : "text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+              }`}
+              onClick={() => setActiveTab("bincome")}
+            >
+              <div className={`p-2 rounded-lg ${activeTab === "bincome" ? "bg-white/20" : "bg-cyan-100"}`}>
+                <svg className={`w-5 h-5 ${activeTab === "bincome" ? "text-white" : "text-cyan-600"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7"></path>
+                </svg>
+              </div>
+              <span className="text-sm md:text-base">ورودی کمپل</span>
+            </button>
+
+            {/* دسته‌بندی‌ها */}
             <button
               className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
                 activeTab === "categories"
@@ -70,7 +89,7 @@ const Stock = () => {
               <span className="text-sm md:text-base">دسته‌بندی‌ها</span>
             </button>
 
-            {/* انواع (Types) */}
+            {/* انواع */}
             <button
               className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
                 activeTab === "types"
@@ -104,8 +123,22 @@ const Stock = () => {
               <span className="text-sm md:text-base">موجودی فعلی</span>
             </button>
 
-            {/* خروج پلیت (commented as in original) */}
-            {/* <button ...>...</button> */}
+            {/* فروشنده (Customers) */}
+            <button
+              className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
+                activeTab === "customers"
+                  ? "bg-gradient-to-r from-cyan-600 to-cyan-500 text-white shadow-lg shadow-cyan-100"
+                  : "text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+              }`}
+              onClick={() => setActiveTab("customers")}
+            >
+              <div className={`p-2 rounded-lg ${activeTab === "customers" ? "bg-white/20" : "bg-cyan-100"}`}>
+                <svg className={`w-5 h-5 ${activeTab === "customers" ? "text-white" : "text-cyan-600"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                </svg>
+              </div>
+              <span className="text-sm md:text-base">فروشنده</span>
+            </button>
           </div>
 
           {/* Tab Indicator Line */}
@@ -118,6 +151,11 @@ const Stock = () => {
             {activeTab === "incoming" && (
               <div className="animate-fadeIn">
                 <IncomeManager />
+              </div>
+            )}
+            {activeTab === "bincome" && (
+              <div className="animate-fadeIn">
+                <BincomeManager />
               </div>
             )}
             {activeTab === "categories" && (
@@ -133,6 +171,11 @@ const Stock = () => {
             {activeTab === "existed" && (
               <div className="animate-fadeIn">
                 <CategoryReports />
+              </div>
+            )}
+            {activeTab === "customers" && (
+              <div className="animate-fadeIn">
+                <Customers />
               </div>
             )}
           </div>

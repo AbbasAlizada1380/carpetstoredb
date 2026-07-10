@@ -12,8 +12,8 @@ const ExpenseTable = ({
   onEdit,
   onDelete,
 }) => {
-
   const { currentUser } = useSelector((state) => state.user);
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
       {/* Table Header */}
@@ -27,11 +27,9 @@ const ExpenseTable = ({
             </div>
             <div>
               <h2 className="text-xl font-bold">لیست هزینه‌ها</h2>
-
             </div>
             <div><ExpenseDateDownload /></div>
           </div>
-
         </div>
       </div>
 
@@ -44,6 +42,7 @@ const ExpenseTable = ({
               <th className="p-3 border-b font-semibold">هدف هزینه</th>
               <th className="p-3 border-b font-semibold">پرداخت کننده</th>
               <th className="p-3 border-b font-semibold">مبلغ (افغانی)</th>
+              <th className="p-3 border-b font-semibold">محاسبه شده</th>
               <th className="p-3 border-b font-semibold">توضیحات</th>
               <th className="p-3 border-b font-semibold">تاریخ ثبت</th>
               <th className="p-3 border-b font-semibold">عملیات</th>
@@ -52,7 +51,7 @@ const ExpenseTable = ({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="6" className="p-8">
+                <td colSpan="8" className="p-8">
                   <div className="flex flex-col items-center justify-center">
                     <div className="w-12 h-12 border-4 border-cyan-200 border-t-cyan-800 rounded-full animate-spin mb-3"></div>
                     <p className="text-gray-600">در حال بارگذاری...</p>
@@ -65,13 +64,9 @@ const ExpenseTable = ({
                   key={e.id}
                   className="hover:bg-gray-50 border-b last:border-0 transition-colors"
                 >
-                  <td className="p-3 text-gray-600">
-                    {e.id}
-                  </td>
+                  <td className="p-3 text-gray-600">{e.id}</td>
                   <td className="p-3 font-medium text-gray-800">
-                    <div className="max-w-xs mx-auto truncate">
-                      {e.purpose}
-                    </div>
+                    <div className="max-w-xs mx-auto truncate">{e.purpose}</div>
                   </td>
                   <td className="p-3">
                     <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-sm">
@@ -87,6 +82,17 @@ const ExpenseTable = ({
                     </div>
                   </td>
                   <td className="p-3">
+                    {e.calculated ? (
+                      <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
+                        بله
+                      </span>
+                    ) : (
+                      <span className="bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-sm font-medium">
+                        خیر
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3">
                     <div className="max-w-xs mx-auto">
                       {e.description ? (
                         <div className="text-gray-600 text-sm truncate" title={e.description}>
@@ -98,35 +104,41 @@ const ExpenseTable = ({
                     </div>
                   </td>
                   <td className="p-3">
-                    {e.createdAt ?
+                    {e.createdAt ? (
                       new Date(e.createdAt)
-                        .toLocaleDateString('eng-en')
-                        .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
-                      : '—'
-                    }
+                        .toLocaleDateString("eng-en")
+                        .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="p-3">
-                    {currentUser.role == "admin" ? (<div className="flex items-center justify-center gap-2">
-                      <button
-                        onClick={() => onEdit(e)}
-                        className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
-                        title="ویرایش"
-                      >
-                        <FaEdit />
-                      </button>
-                      <button
-                        onClick={() => onDelete(e.id)}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
-                        title="حذف"
-                      ><FaTrash />
-                      </button>
-                    </div>) : "--"}
+                    {currentUser.role === "admin" ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => onEdit(e)}
+                          className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
+                          title="ویرایش"
+                        >
+                          <FaEdit />
+                        </button>
+                        <button
+                          onClick={() => onDelete(e.id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                          title="حذف"
+                        >
+                          <FaTrash />
+                        </button>
+                      </div>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan="6" className="p-8">
+                <td colSpan="8" className="p-8">
                   <div className="flex flex-col items-center justify-center">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-gray-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -142,13 +154,13 @@ const ExpenseTable = ({
       </div>
 
       {/* Pagination */}
-        <div className="border-t border-gray-200">
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={onPageChange}
-          />
-        </div>
+      <div className="border-t border-gray-200">
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={onPageChange}
+        />
+      </div>
     </div>
   );
 };

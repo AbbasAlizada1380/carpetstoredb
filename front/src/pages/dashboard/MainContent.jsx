@@ -12,6 +12,7 @@ import BuyerManagement from "./pages/buyer/BuyerManagement.jsx";
 import PayManager from "./pages/finance/PayManager.jsx";
 import ReceiptManager from "./pages/finance/ReceiptManager.jsx";
 import OtherIncomeManager from "./pages/finance/OtherIncomeManager.jsx";
+import SalesAndCustomers from "./pages/Sales/SalesAndCustomers.jsx";
 const MainContent = ({ activeComponent }) => {
   const renderContent = () => {
     switch (activeComponent) {
@@ -42,7 +43,7 @@ const MainContent = ({ activeComponent }) => {
       case "otherincome":
         return <OtherIncomeManager />;
       case "sells":
-        return <SellManager />;
+        return <SalesAndCustomers />;
       case "AddUser":
         return <AddUser />;
 

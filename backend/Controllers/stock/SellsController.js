@@ -1,111 +1,28 @@
-import { Sells, Category, Type, Buyer, Income, BuyerAccount, Receipt, Bill } from "../../Models/index.js";
+import { Sells, Category, Type, Buyer, Income, BuyerAccount, Receipt, Bill, sequelize } from "../../Models/index.js";
 
 // ======================= HELPERS =======================
 
-const syncSIncomeForType = async (typeId) => {
+// Updated to accept transaction
+const syncSIncomeForType = async (typeId, transaction = null) => {
   if (!typeId) return;
   const categories = await Category.findAll({
     where: { typeId },
     attributes: ['id'],
+    transaction,
   });
   const categoryIds = categories.map(c => c.id);
   if (categoryIds.length === 0) {
-    await Type.update({ SIncome: [] }, { where: { id: typeId } });
+    await Type.update({ SIncome: [] }, { where: { id: typeId }, transaction });
     return;
   }
   const sells = await Sells.findAll({
     where: { categoryId: categoryIds },
     attributes: ['id'],
     order: [['id', 'ASC']],
+    transaction,
   });
   const sellIds = sells.map(s => s.id);
-  await Type.update({ SIncome: sellIds }, { where: { id: typeId } });
-};
-
-const getOrCreateBuyer = async (buyerId, newBuyerName) => {
-  if (buyerId) {
-    const buyer = await Buyer.findByPk(buyerId);
-    if (!buyer) throw new Error("Selected buyer does not exist");
-    return buyer.id;
-  }
-  if (newBuyerName && newBuyerName.trim()) {
-    const trimmedName = newBuyerName.trim();
-    let buyer = await Buyer.findOne({ where: { fullname: trimmedName } });
-    if (!buyer) {
-      buyer = await Buyer.create({
-        fullname: trimmedName,
-        isActive: false,
-      });
-    }
-    return buyer.id;
-  }
-  throw new Error("Either buyerId or newBuyer is required");
-};
-
-// UPDATED: Add bill ID to BuyerAccount and manage has_remaindIds
-const addBillToBuyerAccount = async (buyerId, billId, isFullyPaid) => {
-  let account = await BuyerAccount.findOne({ where: { buyerId } });
-  if (!account) {
-    account = await BuyerAccount.create({
-      buyerId,
-      sellIds: [],          // now stores bill IDs
-      remaindIds: [],       // stores unpaid/partial bill IDs
-      receiptSaleIds: [],   // stores fully paid bill IDs
-      receiptIds: [],       // stores receipt IDs (unchanged)
-      has_remaindIds: false,
-    });
-  }
-
-  let sellIds = account.sellIds || [];
-  if (!sellIds.includes(billId)) sellIds.push(billId);
-
-  let receiptSaleIds = account.receiptSaleIds || [];
-  let remaindIds = account.remaindIds || [];
-
-  if (isFullyPaid) {
-    if (!receiptSaleIds.includes(billId)) receiptSaleIds.push(billId);
-    remaindIds = remaindIds.filter(id => id !== billId);
-  } else {
-    if (!remaindIds.includes(billId)) remaindIds.push(billId);
-    receiptSaleIds = receiptSaleIds.filter(id => id !== billId);
-  }
-
-  // Set has_remaindIds based on the new remaindIds array
-  const hasRemaind = remaindIds.length > 0;
-
-  await account.update({
-    sellIds,
-    remaindIds,
-    receiptSaleIds,
-    has_remaindIds: hasRemaind,
-  });
-  return account;
-};
-
-const createReceiptAndLink = async (buyerId, amount, description = "") => {
-  if (!amount || amount <= 0) return null;
-  const receipt = await Receipt.create({
-    buyerId,
-    amountofmoney: amount,
-    description: description || `رسید برای فروش`,
-  });
-  let account = await BuyerAccount.findOne({ where: { buyerId } });
-  if (!account) {
-    account = await BuyerAccount.create({
-      buyerId,
-      sellIds: [],
-      remaindIds: [],
-      receiptSaleIds: [],
-      receiptIds: [],
-      has_remaindIds: false,
-    });
-  }
-  let receiptIds = account.receiptIds || [];
-  if (!receiptIds.includes(receipt.id)) {
-    receiptIds.push(receipt.id);
-    await account.update({ receiptIds });
-  }
-  return receipt;
+  await Type.update({ SIncome: sellIds }, { where: { id: typeId }, transaction });
 };
 
 const generateBillNumber = async () => {
@@ -124,41 +41,63 @@ const generateBillNumber = async () => {
 // ======================= MAIN CONTROLLER =======================
 
 export const createSell = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
-    let { sells, buyerId, newBuyer } = req.body;
+    let { sells, buyerId, newBuyer, discount_amount = 0 } = req.body;
 
+    // --- Input validation ---
     if (!sells) {
-      if (req.body.categoryId) {
-        sells = [req.body];
-      } else {
-        return res.status(400).json({ message: "No sells array provided" });
-      }
+      if (req.body.categoryId) sells = [req.body];
+      else return res.status(400).json({ message: "No sells array provided" });
     }
-
     if (!Array.isArray(sells) || sells.length === 0) {
-      return res.status(400).json({ message: "Sells must be a non-empty array" });
+      return res.status(400).json({ message: "Sells must be a non‑empty array" });
     }
-
     if (!buyerId && !newBuyer) {
-      return res.status(400).json({ message: "Either buyerId or newBuyer is required at root level" });
+      return res.status(400).json({ message: "Either buyerId or newBuyer is required" });
     }
 
-    let finalBuyerId;
-    try {
-      finalBuyerId = await getOrCreateBuyer(buyerId, newBuyer);
-    } catch (error) {
-      return res.status(400).json({ message: error.message });
+    // Parse discount as number, default 0
+    const discountVal = parseFloat(discount_amount) || 0;
+
+    // --- 1. Get or create buyer (within transaction) ---
+    let buyer = null;
+
+    const createBuyer = async (name, transaction) => {
+      const trimmed = name?.trim() || 'Unknown Buyer';
+      let existing = await Buyer.findOne({ where: { fullname: trimmed }, transaction });
+      if (existing) return existing;
+      return await Buyer.create(
+        { fullname: trimmed, isActive: false },
+        { transaction }
+      );
+    };
+
+    if (buyerId) {
+      buyer = await Buyer.findByPk(buyerId, { transaction: t });
+      if (!buyer) {
+        const name = newBuyer && newBuyer.trim() ? newBuyer.trim() : `Buyer-${buyerId}`;
+        buyer = await createBuyer(name, t);
+      }
+    } else if (newBuyer && newBuyer.trim()) {
+      buyer = await createBuyer(newBuyer, t);
+    } else {
+      buyer = await createBuyer('Unknown Buyer', t);
     }
 
+    const finalBuyerId = buyer.id;
+    // --- 2. Process each sell ---
     const createdSells = [];
     let totalAmountSum = 0;
     let totalReceiptSum = 0;
 
     for (const sellData of sells) {
-      let { categoryId, incomeId, length, area, amount, unit_price, receipt, remaind } = sellData;
+      let { incomeId, length, area, amount, unit_price, receipt, remaind } = sellData;
 
-      if (!categoryId || !incomeId || !length || !unit_price) {
-        return res.status(400).json({ message: "Missing required fields: categoryId, incomeId, length, unit_price" });
+      // Validations
+      if (!incomeId || !length || !unit_price) {
+        await t.rollback();
+        return res.status(400).json({ message: "Missing required fields" });
       }
 
       const lengthNum = parseFloat(length);
@@ -166,47 +105,56 @@ export const createSell = async (req, res) => {
       const amountNum = parseFloat(amount);
       const areaNum = parseFloat(area) || 0;
 
-      if (isNaN(lengthNum) || lengthNum <= 0) {
-        return res.status(400).json({ message: "Length must be a positive number" });
-      }
-      if (isNaN(unitPriceNum) || unitPriceNum <= 0) {
-        return res.status(400).json({ message: "Unit price must be a positive number" });
-      }
-      if (isNaN(amountNum) || amountNum <= 0) {
-        return res.status(400).json({ message: "Amount (total money) must be a positive number" });
+      if (isNaN(lengthNum) || lengthNum <= 0 || isNaN(unitPriceNum) || unitPriceNum <= 0 || isNaN(amountNum) || amountNum <= 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "Invalid numeric values" });
       }
 
       const expectedAmount = lengthNum * unitPriceNum;
       if (Math.abs(amountNum - expectedAmount) > 0.01) {
-        return res.status(400).json({
-          message: `Amount mismatch: computed ${expectedAmount}, received ${amountNum}`
-        });
+        await t.rollback();
+        return res.status(400).json({ message: `Amount mismatch` });
       }
 
-      const category = await Category.findByPk(categoryId, { include: [{ model: Type, as: "type" }] });
-      if (!category) return res.status(400).json({ message: `Category not found for ID ${categoryId}` });
-      const typeId = category.type?.id;
-      if (!typeId) return res.status(400).json({ message: `Category ${categoryId} has no associated Type` });
+      // ── Fetch Income (and its category) ──
+      const income = await Income.findByPk(incomeId, {
+        include: [{ model: Category, as: "category" }],
+        transaction: t,
+      });
 
-      const income = await Income.findByPk(incomeId);
-      if (!income) return res.status(400).json({ message: `Income not found for ID ${incomeId}` });
-      if (income.categoryId !== parseInt(categoryId)) {
-        return res.status(400).json({ message: `Income ${incomeId} does not belong to category ${categoryId}` });
+      if (!income) {
+        await t.rollback();
+        return res.status(400).json({ message: "Income not found" });
       }
 
+      // Use income's categoryId – ignore the one from request
+      const actualCategoryId = income.categoryId;
+
+      // Get category and type for sync
+      const category = await Category.findByPk(actualCategoryId, {
+        include: [{ model: Type, as: "type" }],
+        transaction: t,
+      });
+      if (!category || !category.type) {
+        await t.rollback();
+        return res.status(400).json({ message: "Category or type not found" });
+      }
+      const typeId = category.type.id;
+
+      // Check available length
       const availableLength = parseFloat(income.length);
       if (availableLength < lengthNum) {
-        return res.status(400).json({
-          message: `Insufficient length! Available: ${availableLength}, Requested: ${lengthNum.toFixed(2)}`
-        });
+        await t.rollback();
+        return res.status(400).json({ message: "Insufficient length" });
       }
 
+      // Update income (reduce length)
       const newLength = availableLength - lengthNum;
       const newArea = parseFloat(income.width) * newLength;
-      await income.update({ length: newLength, area: newArea });
+      await income.update({ length: newLength, area: newArea }, { transaction: t });
 
-      const EPSILON = 1e-6;
-      if (newLength <= EPSILON) {
+      // Move income to SIncome if exhausted
+      if (newLength <= 1e-6) {
         let eIncome = Array.isArray(category.EIncome) ? [...category.EIncome] : [];
         let sIncome = Array.isArray(category.SIncome) ? [...category.SIncome] : [];
         const incomeIdNum = parseInt(incomeId);
@@ -216,71 +164,156 @@ export const createSell = async (req, res) => {
         if (!sIncome.includes(incomeIdNum)) {
           sIncome.push(incomeIdNum);
         }
-        await category.update({ EIncome: eIncome, SIncome: sIncome });
+        await category.update({ EIncome: eIncome, SIncome: sIncome }, { transaction: t });
       }
 
       const receiptAmount = parseFloat(receipt) || 0;
       const finalRemaind = remaind !== undefined ? parseFloat(remaind) : amountNum - receiptAmount;
 
-      const newSell = await Sells.create({
-        categoryId,
-        incomeId,
-        unit_price: unitPriceNum,
-        area: areaNum,
-        length: lengthNum,
-        receipt: receiptAmount,
-        remaind: finalRemaind,
-        total: amountNum,
-        buyerId: finalBuyerId,
-      });
+      // ── Create Sell record using income's categoryId ──
+      const newSell = await Sells.create(
+        {
+          categoryId: actualCategoryId,      // ✅ use income's category
+          incomeId,
+          unit_price: unitPriceNum,
+          area: areaNum,
+          length: lengthNum,
+          receipt: receiptAmount,
+          remaind: finalRemaind,
+          total: amountNum,
+          buyerId: finalBuyerId,
+        },
+        { transaction: t }
+      );
 
       createdSells.push(newSell);
       totalAmountSum += amountNum;
       totalReceiptSum += receiptAmount;
 
-      // Update income's Sells array (still per-sell, not changed)
+      // Update income's Sells array
       let currentSells = income.Sells || [];
       if (!currentSells.includes(newSell.id)) {
         currentSells.push(newSell.id);
-        await income.update({ Sells: currentSells });
+        await income.update({ Sells: currentSells }, { transaction: t });
       }
 
-      await syncSIncomeForType(typeId);
+      // Update type's SIncome (aggregate)
+      await syncSIncomeForType(typeId, t);
     }
 
-    // Create the Bill
+    // --- 3. Apply discount and validate receipt ---
+    if (discountVal > totalAmountSum) {
+      await t.rollback();
+      return res.status(400).json({ message: "Discount amount cannot exceed total invoice amount" });
+    }
+
+    const discountedTotal = totalAmountSum - discountVal;
+    if (totalReceiptSum > discountedTotal + 0.01) {
+      await t.rollback();
+      return res.status(400).json({ message: "Receipt amount exceeds total after discount" });
+    }
+
+    // --- 4. Create Bill ---
     const billNumber = await generateBillNumber();
-    const remainingAmount = totalAmountSum - totalReceiptSum;
+    const remainingAmount = discountedTotal - totalReceiptSum;
     let status = "unpaid";
     if (remainingAmount === 0) status = "paid";
-    else if (totalReceiptSum > 0 && remainingAmount > 0) status = "partial";
+    else if (totalReceiptSum > 0) status = "partial";
 
     const sellIds = createdSells.map(s => s.id);
-    const newBill = await Bill.create({
-      billNumber,
-      buyerId: finalBuyerId,
-      date: new Date(),
-      totalAmount: totalAmountSum,
-      paidAmount: totalReceiptSum,
-      remainingAmount,
-      status,
-      notes: null,
-      discount_percent: 0,
-      discounted_amount: 0,
-      sells: sellIds,
-    });
+    const newBill = await Bill.create(
+      {
+        billNumber,
+        buyerId: finalBuyerId,
+        date: new Date(),
+        totalAmount: totalAmountSum,               // original total before discount
+        paidAmount: totalReceiptSum,
+        remainingAmount: remainingAmount,
+        status,
+        notes: null,
+        discount_percent: 0,                       // we only handle fixed amount for now
+        discounted_amount: discountVal,            // store the discount
+        sells: sellIds,
+      },
+      { transaction: t }
+    );
 
-    // Add the BILL to BuyerAccount (instead of individual sells)
-    await addBillToBuyerAccount(finalBuyerId, newBill.id, status === 'paid');
-
-    // Create ONE receipt for the total paid amount and capture it
-    let createdReceipt = null;
-    if (totalReceiptSum > 0) {
-      const receiptDescription = `پرداخت برای فاکتور ${billNumber} (جمع کل ${totalAmountSum}؋)`;
-      createdReceipt = await createReceiptAndLink(finalBuyerId, totalReceiptSum, receiptDescription);
+    // --- 5. Update BuyerAccount (same as before) ---
+    const buyerCheck = await Buyer.findByPk(finalBuyerId, { transaction: t });
+    if (!buyerCheck) {
+      await t.rollback();
+      return res.status(404).json({ message: "Buyer disappeared unexpectedly" });
     }
 
-    // Fetch detailed sells for response
+    let account = await BuyerAccount.findOne({
+      where: { buyerId: finalBuyerId },
+      transaction: t,
+      lock: true,
+    });
+
+    if (!account) {
+      account = await BuyerAccount.create(
+        {
+          buyerId: finalBuyerId,
+          sellIds: [],
+          remaindIds: [],
+          receiptSaleIds: [],
+          receiptIds: [],
+          has_remaindIds: false,
+        },
+        { transaction: t }
+      );
+    }
+
+    let sellIdsArr = account.sellIds || [];
+    if (!sellIdsArr.includes(newBill.id)) sellIdsArr.push(newBill.id);
+
+    let receiptSaleIdsArr = account.receiptSaleIds || [];
+    let remaindIdsArr = account.remaindIds || [];
+
+    if (status === 'paid') {
+      if (!receiptSaleIdsArr.includes(newBill.id)) receiptSaleIdsArr.push(newBill.id);
+      remaindIdsArr = remaindIdsArr.filter(id => id !== newBill.id);
+    } else {
+      if (!remaindIdsArr.includes(newBill.id)) remaindIdsArr.push(newBill.id);
+      receiptSaleIdsArr = receiptSaleIdsArr.filter(id => id !== newBill.id);
+    }
+
+    const hasRemaind = remaindIdsArr.length > 0;
+    await account.update(
+      {
+        sellIds: sellIdsArr,
+        remaindIds: remaindIdsArr,
+        receiptSaleIds: receiptSaleIdsArr,
+        has_remaindIds: hasRemaind,
+      },
+      { transaction: t }
+    );
+
+    // --- 6. Create receipt (if any payment) ---
+    let createdReceipt = null;
+    if (totalReceiptSum > 0) {
+      const receipt = await Receipt.create(
+        {
+          buyerId: finalBuyerId,
+          amountofmoney: totalReceiptSum,
+          description: `پرداخت برای فاکتور ${billNumber} (جمع کل ${totalAmountSum}؋، تخفیف ${discountVal}؋)`,
+        },
+        { transaction: t }
+      );
+
+      let receiptIdsArr = account.receiptIds || [];
+      if (!receiptIdsArr.includes(receipt.id)) {
+        receiptIdsArr.push(receipt.id);
+        await account.update({ receiptIds: receiptIdsArr }, { transaction: t });
+      }
+      createdReceipt = receipt;
+    }
+
+    // --- 7. Commit ---
+    await t.commit();
+
+    // --- 8. Fetch detailed response ---
     const createdWithDetails = await Sells.findAll({
       where: { id: sellIds },
       include: [
@@ -290,43 +323,39 @@ export const createSell = async (req, res) => {
       ],
     });
 
-    // Return response including the receipt
     res.status(201).json({
       sells: createdWithDetails,
       bill: newBill,
       receipt: createdReceipt,
     });
   } catch (error) {
+    await t.rollback();
     console.error(error);
     res.status(500).json({ error: error.message });
   }
 };
 
+// ========== GET ALL ==========
 export const getAllSells = async (req, res) => {
   try {
-    // Pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
-    // Fetch paginated sells
     const { count, rows } = await Sells.findAndCountAll({
       include: [
         { model: Category, as: "categoryDetail", include: [{ model: Type, as: "type" }] },
         { model: Buyer, as: "buyer" },
       ],
       order: [["createdAt", "DESC"]],
-      limit: limit,
-      offset: offset,
+      limit,
+      offset,
     });
-
-    // Calculate total pages
-    const totalPages = Math.ceil(count / limit);
 
     res.status(200).json({
       data: rows,
       totalItems: count,
-      totalPages: totalPages,
+      totalPages: Math.ceil(count / limit),
       currentPage: page,
     });
   } catch (error) {
@@ -334,7 +363,7 @@ export const getAllSells = async (req, res) => {
   }
 };
 
-// ========== READ ONE ==========
+// ========== GET ONE ==========
 export const getSellById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -360,11 +389,22 @@ export const updateSell = async (req, res) => {
     const sell = await Sells.findByPk(id);
     if (!sell) return res.status(404).json({ message: "Sell not found" });
 
-    // Handle buyer change
     let finalBuyerId = sell.buyerId;
     if (buyerId !== undefined || newBuyer !== undefined) {
       try {
-        finalBuyerId = await getOrCreateBuyer(buyerId, newBuyer);
+        // Reuse the same logic (but without transaction for simplicity)
+        if (buyerId) {
+          const buyer = await Buyer.findByPk(buyerId);
+          if (!buyer) throw new Error("Selected buyer does not exist");
+          finalBuyerId = buyer.id;
+        } else if (newBuyer && newBuyer.trim()) {
+          const trimmed = newBuyer.trim();
+          let buyer = await Buyer.findOne({ where: { fullname: trimmed } });
+          if (!buyer) {
+            buyer = await Buyer.create({ fullname: trimmed, isActive: false });
+          }
+          finalBuyerId = buyer.id;
+        }
       } catch (error) {
         return res.status(400).json({ message: error.message });
       }
@@ -383,20 +423,16 @@ export const updateSell = async (req, res) => {
       sell.Category = newCategoryId;
     }
 
-    // Update other fields
     if (unit_price !== undefined) sell.unit_price = unit_price;
     if (amount !== undefined) sell.amount = amount;
     if (receipt !== undefined) sell.receipt = receipt;
     if (remaind !== undefined) sell.remaind = remaind;
-
-    // Recalculate total if price or amount changed
     if (unit_price !== undefined || amount !== undefined) {
       sell.total = sell.unit_price * sell.amount;
     }
 
     await sell.save();
 
-    // Sync SIncome for affected types
     if (newTypeId !== null && newTypeId !== oldTypeId) {
       if (oldTypeId) await syncSIncomeForType(oldTypeId);
       if (newTypeId) await syncSIncomeForType(newTypeId);
@@ -425,10 +461,7 @@ export const deleteSell = async (req, res) => {
     const typeId = category?.type?.id;
 
     await sell.destroy();
-
-    if (typeId) {
-      await syncSIncomeForType(typeId);
-    }
+    if (typeId) await syncSIncomeForType(typeId);
 
     res.status(200).json({ message: "Sell deleted successfully" });
   } catch (error) {

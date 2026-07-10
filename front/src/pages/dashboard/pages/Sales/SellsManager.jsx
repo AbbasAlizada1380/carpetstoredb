@@ -1,10 +1,20 @@
+// components/stock/SellManager.jsx
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { FaEdit, FaTrash, FaSpinner, FaPlus, FaTimes, FaPrint } from "react-icons/fa";
+import {
+  FaEdit,
+  FaTrash,
+  FaSpinner,
+  FaPlus,
+  FaTimes,
+  FaPrint,
+  FaLayerGroup,
+} from "react-icons/fa";
 import Pagination from "../../pagination/Pagination";
 import SellForm from "./SellForm";
+import BSaleForm from "./BSaleForm"; // 👈 import blanket form
 import BillReportsDownload from "../report/BillReportsDownload";
-import SingleBillDownload from "../report/SingleBillDownload"; // new import
+import SingleBillDownload from "../report/SingleBillDownload";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const BILL_API = `${BASE_URL}/bill`;
@@ -14,6 +24,9 @@ const SellManager = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
+
+  // ─── Toggle: "carpet" or "blanket" ──────────────────────────────
+  const [saleType, setSaleType] = useState("carpet"); // "carpet" | "blanket"
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -101,112 +114,64 @@ const SellManager = () => {
     }
   };
 
-  // Function to print a single bill as PDF (simple version using window.print or a dedicated component)
-  const printSingleBill = (bill) => {
-    const printWindow = window.open("", "_blank");
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html dir="rtl">
-      <head>
-        <meta charset="UTF-8">
-        <title>فاکتور ${bill.billNumber}</title>
-        <style>
-          body { font-family: Tahoma, sans-serif; margin: 40px; background: #fff; }
-          .header { text-align: center; margin-bottom: 30px; }
-          .bill-details { border: 1px solid #ccc; padding: 20px; margin-bottom: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
-          th { background-color: #f2f2f2; }
-          .total-row { font-weight: bold; background-color: #f9f9f9; }
-          @media print {
-            body { margin: 0; padding: 20px; }
-            .no-print { display: none; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h2>فاکتور فروش</h2>
-          <h3>شماره: ${bill.billNumber}</h3>
-        </div>
-        <div class="bill-details">
-          <p><strong>خریدار:</strong> ${bill.buyer?.fullname || "---"}</p>
-          <p><strong>تاریخ:</strong> ${new Date(bill.date).toLocaleDateString("fa-IR")}</p>
-          <p><strong>وضعیت:</strong> ${bill.status === "paid" ? "پرداخت شده" : bill.status === "partial" ? "پرداخت جزئی" : "پرداخت نشده"}</p>
-          <p><strong>یادداشت:</strong> ${bill.notes || "---"}</p>
-        </div>
-        <h4>اقلام فروش</h4>
-        <table>
-          <thead>
-            <tr>
-              <th>ردیف</th>
-              <th>کد کالا</th>
-              <th>طول (متر)</th>
-              <th>مساحت (متر مربع)</th>
-              <th>قیمت واحد (؋)</th>
-              <th>مبلغ کل (؋)</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${(bill.sellRecords || []).map((sell, idx) => `
-              <tr>
-                <td>${idx + 1}</td>
-                <td>${sell.income?.lotNumber || sell.incomeId}</td>
-                <td>${sell.length}</td>
-                <td>${sell.area}</td>
-                <td>${sell.unit_price}</td>
-                <td>${sell.total}</td>
-              </tr>
-            `).join("")}
-            <tr class="total-row">
-              <td colspan="5">جمع کل</td>
-              <td>${bill.totalAmount}</td>
-            </tr>
-            <tr>
-              <td colspan="5">پرداخت شده</td>
-              <td>${bill.paidAmount}</td>
-            </tr>
-            <tr>
-              <td colspan="5">باقیمانده</td>
-              <td>${bill.remainingAmount}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="no-print" style="text-align: center; margin-top: 30px;">
-          <button onclick="window.print();">چاپ فاکتور</button>
-        </div>
-      </body>
-      </html>
-    `;
-    printWindow.document.write(htmlContent);
-    printWindow.document.close();
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 p-6 space-y-8" dir="rtl">
       <div className="text-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت فاکتورهای فروش (بیل)</h1>
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت فاکتورهای فروش</h1>
         <p className="text-gray-600">مشاهده، ویرایش یادداشت و حذف فاکتورهای ثبت شده</p>
       </div>
 
-      <div className="flex justify-center mb-6">
-        {!showForm ? (
+      {/* ─── Toggle & Add Buttons ─────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-center gap-4 mb-6">
+        {/* Sale type toggle */}
+        <div className="flex items-center gap-2 bg-white rounded-xl shadow-md p-1 border border-gray-200">
           <button
-            onClick={() => setShowForm(true)}
-            className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-xl hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md flex items-center gap-2"
+            onClick={() => setSaleType("carpet")}
+            className={`px-4 py-2 rounded-lg transition font-medium flex items-center gap-2 ${
+              saleType === "carpet"
+                ? "bg-cyan-700 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            }`}
           >
-            <FaPlus />
-            ثبت فروش جدید
+            فروش فرش
           </button>
-        ) : (
           <button
-            onClick={() => setShowForm(false)}
-            className="px-6 py-3 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition font-medium shadow-md flex items-center gap-2"
+            onClick={() => setSaleType("blanket")}
+            className={`px-4 py-2 rounded-lg transition font-medium flex items-center gap-2 ${
+              saleType === "blanket"
+                ? "bg-cyan-700 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            }`}
           >
-            <FaTimes />
-            بستن فرم
+            <FaLayerGroup />
+            فروش بلنکت
           </button>
-        )}
+        </div>
+
+        {/* Add / Close button */}
+        <div>
+          {!showForm ? (
+            <button
+              onClick={() => setShowForm(true)}
+              className={`px-6 py-3 rounded-xl transition font-medium shadow-md flex items-center gap-2 ${
+                saleType === "carpet"
+                  ? "bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white"
+                  : "bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white"
+              }`}
+            >
+              <FaPlus />
+              ثبت فروش {saleType === "carpet" ? "فرش" : "بلنکت"}
+            </button>
+          ) : (
+            <button
+              onClick={handleFormCancel}
+              className="px-6 py-3 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition font-medium shadow-md flex items-center gap-2"
+            >
+              <FaTimes />
+              بستن فرم
+            </button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -219,24 +184,46 @@ const SellManager = () => {
       )}
 
       {showForm && (
-        <SellForm
-          onSuccess={handleFormSuccess}
-          onCancel={handleFormCancel}
-          editingId={null}
-          initialEntries={[{
-            typeId: "",
-            categoryId: "",
-            incomeId: "",
-            incomeWidth: "",
-            length: "",
-            area: "",
-            total: "",
-            unit_price: "",
-          }]}
-        />
+        <>
+          {saleType === "carpet" ? (
+            <SellForm
+              onSuccess={handleFormSuccess}
+              onCancel={handleFormCancel}
+              editingId={null}
+              initialEntries={[
+                {
+                  typeId: "",
+                  categoryId: "",
+                  incomeId: "",
+                  incomeWidth: "",
+                  length: "",
+                  area: "",
+                  total: "",
+                  unit_price: "",
+                },
+              ]}
+            />
+          ) : (
+            <BSaleForm
+              onSuccess={handleFormSuccess}
+              onCancel={handleFormCancel}
+              editingId={null}
+              initialEntries={[
+                {
+                  typeId: "",
+                  categoryId: "",
+                  bexistId: "",
+                  quantity: "",
+                  unitPrice: "",
+                  total: "",
+                },
+              ]}
+            />
+          )}
+        </>
       )}
 
-      {/* Bills Table */}
+      {/* ─── Bills Table (common for both) ─────────────────────────────── */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
         <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -258,7 +245,6 @@ const SellManager = () => {
                   در حال بارگذاری...
                 </div>
               )}
-              {/* Reports download component */}
               <BillReportsDownload />
             </div>
           </div>
@@ -276,7 +262,7 @@ const SellManager = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
               <p className="text-gray-500 text-lg">هیچ فاکتوری ثبت نشده است</p>
-              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "ثبت فروش جدید" کلیک کنید</p>
+              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "ثبت فروش ..." کلیک کنید</p>
             </div>
           </div>
         ) : (
@@ -292,6 +278,7 @@ const SellManager = () => {
                     <th className="p-3 border-b font-semibold">پرداخت شده (؋)</th>
                     <th className="p-3 border-b font-semibold">باقیمانده (؋)</th>
                     <th className="p-3 border-b font-semibold">وضعیت</th>
+                    <th className="p-3 border-b font-semibold">تخفیف</th>
                     <th className="p-3 border-b font-semibold">یادداشت</th>
                     <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
@@ -306,16 +293,10 @@ const SellManager = () => {
                       <td className="p-3">{new Intl.NumberFormat().format(bill.paidAmount)}</td>
                       <td className="p-3">{new Intl.NumberFormat().format(bill.remainingAmount)}</td>
                       <td className="p-3">{getStatusBadge(bill.status)}</td>
+                      <td className="p-3">{bill.discounted_amount}</td>
                       <td className="p-3 max-w-xs truncate">{bill.notes || "—"}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-2">
-                          {/* <button
-                            onClick={() => handleEdit(bill)}
-                            className="p-2 text-yellow-600 hover:bg-yellow-50 rounded-lg transition"
-                            title="ویرایش یادداشت"
-                          >
-                            <FaEdit />
-                          </button> */}
                           <button
                             onClick={() => handleDelete(bill.id)}
                             className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
@@ -323,13 +304,6 @@ const SellManager = () => {
                           >
                             <FaTrash />
                           </button>
-                          {/* <button
-                            onClick={() => printSingleBill(bill)}
-                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                            title="چاپ فاکتور"
-                          >
-                            <FaPrint />
-                          </button> */}
                           <SingleBillDownload billId={bill.id} billNumber={bill.billNumber} />
                         </div>
                       </td>

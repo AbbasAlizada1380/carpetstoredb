@@ -28,6 +28,12 @@ const Category = sequelize.define(
       defaultValue: [],
       comment: "Array of IDs for sales income",
     },
+    BIncome: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      comment: "Array of Bincome IDs",
+    },
   },
   {
     timestamps: true,

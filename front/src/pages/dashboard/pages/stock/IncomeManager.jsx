@@ -3,6 +3,7 @@ import axios from "axios";
 import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
 import IncomeForm from "./IncomeForm";
 import Pagination from "../../pagination/Pagination"; // adjust path if needed
+import BincomeManager from "./BincomeManager";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/income`;
@@ -99,7 +100,6 @@ const IncomeManager = () => {
     <div className=" bg-gradient-to-br from-gray-50 to-blue-50 p-6 space-y-8" dir="rtl">
       <div className="text-center mb-6">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت ورودی (Income)</h1>
-        <p className="text-gray-600">ثبت، ویرایش و حذف فرش‌های ورودی (امکان ثبت چند رکورد همزمان)</p>
       </div>
 
       {/* Toggle Form Button */}
@@ -156,7 +156,7 @@ const IncomeManager = () => {
                 </svg>
               </div>
               <div>
-                <h2 className="text-xl font-bold">لیست فرش‌های ورودی</h2>
+                <h2 className="text-xl font-bold">لیست ورودی فرش‌ها</h2>
                 <p className="text-sm text-white/80">مدیریت تمام رکوردهای ثبت شده</p>
               </div>
             </div>

@@ -58,8 +58,15 @@ const Bill = sequelize.define(
       allowNull: false,
       defaultValue: [],
     },
+    bsales: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      comment: "Array of blanket sell (BSales) IDs",
+    },
   },
-  {tableName: "Bill", 
+  {
+    tableName: "Bill",
     timestamps: true,
   }
 );

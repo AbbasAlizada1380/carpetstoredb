@@ -32,7 +32,7 @@ const Customers = () => {
     try {
       setLoading(true);
       const res = await axios.get(
-        `${BASE_URL}/customers?page=${page}&limit=${limit}`
+        `${BASE_URL}/customer?page=${page}&limit=${limit}`
       );
 
       setCustomers(res.data.customers);
@@ -57,9 +57,9 @@ const Customers = () => {
       setSubmitting(true);
 
       if (editingId) {
-        await axios.put(`${BASE_URL}/customers/${editingId}`, form);
+        await axios.put(`${BASE_URL}/customer/${editingId}`, form);
       } else {
-        await axios.post(`${BASE_URL}/customers`, form);
+        await axios.post(`${BASE_URL}/customer`, form);
       }
 
       resetForm();
@@ -92,7 +92,7 @@ const Customers = () => {
     if (!window.confirm("آیا مطمئن هستید؟")) return;
 
     try {
-      await axios.delete(`${BASE_URL}/customers/${id}`);
+      await axios.delete(`${BASE_URL}/customer/${id}`);
       fetchCustomers(currentPage);
     } catch (err) {
       console.error(err);

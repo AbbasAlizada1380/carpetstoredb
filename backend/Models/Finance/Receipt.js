@@ -14,7 +14,7 @@ const Receipt = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: "Buyers",
+        model: "buyers",
         key: "id",
       },
       comment: "Reference to the buyer who paid",

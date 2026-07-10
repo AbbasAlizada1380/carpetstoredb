@@ -62,16 +62,16 @@ const Sidebar = ({ setActiveComponent }) => {
       value: "Stock",
       icon: <MdInventory />,
     },
-    {
-      name: "مشتری",
-      value: "buyer",
-      icon: <MdAttachMoney />,
-    },
-    {
-      name: "فروشندها",
-      value: "customer",
-      icon: <MdFactory />,
-    },
+    // {
+    //   name: "مشتری",
+    //   value: "buyer",
+    //   icon: <MdAttachMoney />,
+    // },
+    // {
+    //   name: "فروشندها",
+    //   value: "customer",
+    //   icon: <MdFactory />,
+    // },
     {
       name: "قروض",
       value: "pay",
