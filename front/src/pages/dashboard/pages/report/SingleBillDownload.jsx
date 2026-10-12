@@ -16,97 +16,171 @@ const SingleBillDownload = ({ billId, billNumber }) => {
 
   const fetchBill = async () => {
     const response = await axios.get(`${BASE_URL}/bill/${billId}`);
-    return response.data.bill;
+    const payload = response.data;
+    return payload?.bill ?? payload;
   };
 
-  const handlePDFDownload = async () => {
-    try {
-      setLoading(true);
-      const bill = await fetchBill();
-      if (!bill) {
-        alert("فاکتور یافت نشد");
-        return;
-      }
+  // ─── Helper: resolve category & type from a sell ───
+  const getCategoryName = (sell) => {
+    return (
+      sell.category?.name ||
+      sell.categoryDetail?.name ||
+      sell.Category?.name ||
+      "---"
+    );
+  };
 
-      const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-      doc.setR2L(false);
-      doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
-      doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
-      doc.setFont("Vazirmatn");
+  const getTypeName = (sell) => {
+    return (
+      sell.type?.name ||
+      sell.categoryDetail?.type?.name ||
+      sell.Category?.type?.name ||
+      "---"
+    );
+  };
 
-      // Header
-      doc.setFontSize(18);
-      doc.text(`فاکتور فروش`, doc.internal.pageSize.getWidth() - 40, 40, { align: "right" });
-      doc.setFontSize(14);
-      doc.text(`شماره: ${bill.billNumber}`, doc.internal.pageSize.getWidth() - 40, 70, { align: "right" });
-
-      // Customer and bill details
-      const buyerName = bill.buyer?.fullname || "---";
-      const billDate = moment(bill.date).format("YYYY/MM/DD");
-      const statusText = bill.status === "paid" ? "پرداخت شده" : bill.status === "partial" ? "پرداخت جزئی" : "پرداخت نشده";
-
-      doc.setFontSize(12);
-      doc.text(`خریدار: ${buyerName}`, doc.internal.pageSize.getWidth() - 40, 100, { align: "right" });
-      doc.text(`تاریخ: ${billDate}`, doc.internal.pageSize.getWidth() - 40, 120, { align: "right" });
-      doc.text(`وضعیت: ${statusText}`, doc.internal.pageSize.getWidth() - 40, 140, { align: "right" });
-      if (bill.notes) {
-        doc.text(`یادداشت: ${bill.notes}`, doc.internal.pageSize.getWidth() - 40, 160, { align: "right" });
-      }
-
-      const sells = bill.sells || bill.sellRecords || [];
-      if (sells.length === 0) {
-        doc.text("هیچ قلم فروشی وجود ندارد.", doc.internal.pageSize.getWidth() - 40, 190, { align: "right" });
-      } else {
-        const headers = [["ردیف", "کد کالا", "طول (متر)", "مساحت (م²)", "قیمت واحد (؋)", "مبلغ کل (؋)"]];
-        const body = sells.map((sell, idx) => [
-          idx + 1,
-          sell.income?.lotNumber || sell.incomeId || "---",
-          sell.length,
-          sell.area,
-          sell.unit_price,
-          sell.total,
-        ]);
-
-        autoTable(doc, {
-          startY: 190,
-          head: headers,
-          body: body,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 10, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: 30, right: 30 },
-        });
-
-        const finalY = doc.lastAutoTable.finalY + 20;
-        doc.setFontSize(12);
-        doc.text(
-          `جمع کل: ${bill.totalAmount} ؋`,
-          doc.internal.pageSize.getWidth() - 40,
-          finalY,
-          { align: "right" }
-        );
-        doc.text(
-          `پرداخت شده: ${bill.paidAmount} ؋`,
-          doc.internal.pageSize.getWidth() - 40,
-          finalY + 20,
-          { align: "right" }
-        );
-        doc.text(
-          `باقیمانده: ${bill.remainingAmount} ؋`,
-          doc.internal.pageSize.getWidth() - 40,
-          finalY + 40,
-          { align: "right" }
-        );
-      }
-
-      doc.save(`bill_${bill.billNumber}.pdf`);
-    } catch (err) {
-      console.error(err);
-      alert("خطا در ایجاد PDF");
-    } finally {
-      setLoading(false);
+const handlePDFDownload = async () => {
+  try {
+    setLoading(true);
+    const bill = await fetchBill();
+    if (!bill) {
+      alert("فاکتور یافت نشد");
+      return;
     }
-  };
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+
+    doc.setR2L(false);
+
+    doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
+    doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
+    doc.setFont("Vazirmatn");
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 40;
+    const contentWidth = pageWidth - margin * 2;
+
+    // ─── Header ───
+    doc.setFontSize(18);
+    doc.text("فاکتور فروش", pageWidth - margin, 50, { align: "right" });
+
+    doc.setFontSize(12);
+    doc.text(`شماره: ${bill.billNumber}`, pageWidth - margin, 80, { align: "right" });
+
+    const buyerName = bill.buyer?.fullname || "---";
+    const billDate = moment(bill.date).format("YYYY/MM/DD");
+    const statusText =
+      bill.status === "paid"
+        ? "پرداخت شده"
+        : bill.status === "partial"
+        ? "پرداخت جزئی"
+        : "پرداخت نشده";
+
+    doc.text(`خریدار: ${buyerName}`, pageWidth - margin, 105, { align: "right" });
+    doc.text(`تاریخ: ${billDate}`, pageWidth - margin, 125, { align: "right" });
+    doc.text(`وضعیت: ${statusText}`, pageWidth - margin, 145, { align: "right" });
+    if (bill.notes) {
+      doc.text(`یادداشت: ${bill.notes}`, pageWidth - margin, 165, { align: "right" });
+    }
+
+    const sells = bill.sells || bill.sellRecords || [];
+    const tableStartY = bill.notes ? 190 : 175;
+
+    if (sells.length === 0) {
+      doc.text("هیچ قلم فروشی وجود ندارد.", pageWidth - margin, tableStartY, {
+        align: "right",
+      });
+    } else {
+      // ✅ 9 headers
+      const headers = [
+        [
+          "نمبر",
+          "کد کالا",
+          "نوع",
+          "دسته‌بندی",
+          "رنگ",
+          "طول (متر)",
+          "مساحت (م²)",
+          "قیمت واحد (؋)",
+          "مبلغ کل (؋)",
+        ],
+      ];
+
+      // ✅ 9 cells per row
+      const body = sells.map((sell, idx) => [
+        idx + 1,
+        sell.income?.lotNumber || sell.incomeId || "---",
+        getTypeName(sell),
+        getCategoryName(sell),
+        sell.income?.color || "---",
+        sell.length,
+        sell.area,
+        sell.unit_price,
+        sell.total,
+      ]);
+
+      autoTable(doc, {
+        startY: tableStartY,
+        head: headers,
+        body: body,
+        theme: "grid",
+        tableWidth: contentWidth,
+        margin: { left: margin, right: margin },
+        styles: {
+          font: "Vazirmatn",
+          fontSize: 9,
+          halign: "center",
+          valign: "middle",
+          cellPadding: 5,
+          overflow: "linebreak",
+        },
+        headStyles: {
+          fillColor: [230, 230, 230],
+          textColor: 20,
+          fontStyle: "normal",
+          halign: "center",
+        },
+        // ✅ 9 column styles, sum = 1.00
+        columnStyles: {
+          0: { cellWidth: contentWidth * 0.05 }, // نمبر
+          1: { cellWidth: contentWidth * 0.11 }, // کد کالا
+          2: { cellWidth: contentWidth * 0.12 }, // نوع
+          3: { cellWidth: contentWidth * 0.13 }, // دسته‌بندی
+          4: { cellWidth: contentWidth * 0.09 }, // رنگ
+          5: { cellWidth: contentWidth * 0.10 }, // طول
+          6: { cellWidth: contentWidth * 0.11 }, // مساحت
+          7: { cellWidth: contentWidth * 0.14 }, // قیمت واحد
+          8: { cellWidth: contentWidth * 0.15 }, // مبلغ کل
+        },
+      });
+
+      const finalY = doc.lastAutoTable.finalY + 25;
+      doc.setFontSize(12);
+      doc.text(`جمع کل: ${bill.totalAmount} ؋`, pageWidth - margin, finalY, {
+        align: "right",
+      });
+      doc.text(
+        `پرداخت شده: ${bill.paidAmount} ؋`,
+        pageWidth - margin,
+        finalY + 20,
+        { align: "right" }
+      );
+      doc.text(
+        `باقیمانده: ${bill.remainingAmount} ؋`,
+        pageWidth - margin,
+        finalY + 40,
+        { align: "right" }
+      );
+    }
+
+    doc.save(`bill_${bill.billNumber}.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert("خطا در ایجاد PDF");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleExcelDownload = async () => {
     try {
@@ -125,16 +199,34 @@ const SingleBillDownload = ({ billId, billNumber }) => {
         ["شماره فاکتور", bill.billNumber],
         ["خریدار", bill.buyer?.fullname || "---"],
         ["تاریخ", moment(bill.date).format("YYYY/MM/DD")],
-        ["وضعیت", bill.status === "paid" ? "پرداخت شده" : bill.status === "partial" ? "پرداخت جزئی" : "پرداخت نشده"],
+        [
+          "وضعیت",
+          bill.status === "paid"
+            ? "پرداخت شده"
+            : bill.status === "partial"
+            ? "پرداخت جزئی"
+            : "پرداخت نشده",
+        ],
         ["یادداشت", bill.notes || "---"],
         [],
-        ["ردیف", "کد کالا", "طول (متر)", "مساحت (م²)", "قیمت واحد (؋)", "مبلغ کل (؋)"],
+        [
+          "ردیف",
+          "کد کالا",
+          "نوع",
+          "دسته‌بندی",
+          "طول (متر)",
+          "مساحت (م²)",
+          "قیمت واحد (؋)",
+          "مبلغ کل (؋)",
+        ],
       ];
 
       sells.forEach((sell, idx) => {
         summaryData.push([
           idx + 1,
           sell.income?.lotNumber || sell.incomeId || "---",
+          getTypeName(sell),
+          getCategoryName(sell),
           sell.length,
           sell.area,
           sell.unit_price,
@@ -142,16 +234,31 @@ const SingleBillDownload = ({ billId, billNumber }) => {
         ]);
       });
 
-      summaryData.push([], ["جمع کل", "", "", "", "", bill.totalAmount]);
-      summaryData.push(["پرداخت شده", "", "", "", "", bill.paidAmount]);
-      summaryData.push(["باقیمانده", "", "", "", "", bill.remainingAmount]);
+      summaryData.push([], ["جمع کل", "", "", "", "", "", "", bill.totalAmount]);
+      summaryData.push(["پرداخت شده", "", "", "", "", "", "", bill.paidAmount]);
+      summaryData.push(["باقیمانده", "", "", "", "", "", "", bill.remainingAmount]);
 
       const worksheet = XLSX.utils.aoa_to_sheet(summaryData);
-      worksheet["!cols"] = [{ wch: 10 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
+      worksheet["!cols"] = [
+        { wch: 8 },   // ردیف
+        { wch: 18 },  // کد کالا
+        { wch: 18 },  // نوع
+        { wch: 18 },  // دسته‌بندی
+        { wch: 12 },  // طول
+        { wch: 12 },  // مساحت
+        { wch: 15 },  // قیمت واحد
+        { wch: 15 },  // مبلغ کل
+      ];
+
+      // RTL worksheet view (Persian Excel users expect this)
+      worksheet["!dir"] = "rtl";
+
       XLSX.utils.book_append_sheet(workbook, worksheet, "فاکتور");
 
       const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-      const blob = new Blob([excelBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const blob = new Blob([excelBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
       saveAs(blob, `bill_${bill.billNumber}.xlsx`);
     } catch (err) {
       console.error(err);

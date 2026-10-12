@@ -23,8 +23,8 @@ Type.hasMany(Category, { foreignKey: "typeId", as: "categoryList" });
 Category.belongsTo(Type, { foreignKey: "typeId", as: "type" });
 
 // Category ↔ Sells (carpet sales)
-Category.hasMany(Sells, { foreignKey: "Category", as: "sells" });
-Sells.belongsTo(Category, { foreignKey: "Category", as: "categoryDetail" });
+Category.hasMany(Sells, { foreignKey: "categoryId", as: "sells" });
+Sells.belongsTo(Category, { foreignKey: "categoryId", as: "categoryDetail" });
 
 // Income ↔ Sells
 Sells.belongsTo(Income, { foreignKey: "incomeId", as: "income" });

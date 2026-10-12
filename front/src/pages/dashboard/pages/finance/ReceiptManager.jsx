@@ -12,6 +12,7 @@ import {
   FaMoneyBillWave,
   FaCalendarAlt,
   FaFileInvoiceDollar,
+  FaTimes,
 } from "react-icons/fa";
 import Pagination from "../../pagination/Pagination";
 import ReceiptReportsDownload from "../report/ReceiptReportsDownload";
@@ -40,6 +41,14 @@ const ReceiptManager = () => {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // Edit modal state
+  const [editingReceipt, setEditingReceipt] = useState(null);
+  const [editBuyerId, setEditBuyerId] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState("");
 
   useEffect(() => {
     fetchAllReceipts(currentPage);
@@ -128,15 +137,55 @@ const ReceiptManager = () => {
     }
   };
 
-  const handleEdit = async (receipt) => {
-    const newDesc = prompt("توضیحات جدید:", receipt.description || "");
-    if (newDesc === null) return;
+  // Open edit modal and populate fields
+  const handleEdit = (receipt) => {
+    setEditingReceipt(receipt);
+    setEditBuyerId(receipt.buyerId?.toString() || "");
+    setEditAmount(receipt.amountofmoney?.toString() || "");
+    setEditDescription(receipt.description || "");
+    setEditError("");
+  };
+
+  // Close edit modal
+  const closeEditModal = () => {
+    setEditingReceipt(null);
+    setEditBuyerId("");
+    setEditAmount("");
+    setEditDescription("");
+    setEditError("");
+  };
+
+  // Submit edited receipt
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingReceipt) return;
+
+    const amountNum = parseFloat(editAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setEditError("مبلغ باید عدد مثبت باشد");
+      return;
+    }
+    if (!editBuyerId) {
+      setEditError("لطفاً خریدار را انتخاب کنید");
+      return;
+    }
+
+    setEditLoading(true);
+    setEditError("");
     try {
-      await axios.put(`${RECEIPT_API}/${receipt.id}`, { description: newDesc });
-      setSuccess("رسید ویرایش شد");
+      await axios.put(`${RECEIPT_API}/${editingReceipt.id}`, {
+        buyerId: parseInt(editBuyerId, 10),
+        amountofmoney: amountNum,
+        description: editDescription.trim() || null,
+      });
+      setSuccess("رسید با موفقیت ویرایش شد");
+      closeEditModal();
       await fetchAllReceipts(currentPage);
+      await fetchUnpaidBuyers();
     } catch (err) {
-      setError("خطا در ویرایش رسید");
+      setEditError(err.response?.data?.message || "خطا در ویرایش رسید");
+    } finally {
+      setEditLoading(false);
     }
   };
 
@@ -376,7 +425,7 @@ const ReceiptManager = () => {
                           <button
                             onClick={() => handleEdit(r)}
                             className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
-                            title="ویرایش توضیحات"
+                            title="ویرایش رسید"
                           >
                             <FaEdit />
                           </button>
@@ -405,16 +454,130 @@ const ReceiptManager = () => {
                 </tfoot>
               </table>
             </div>
-              <div className="p-4 border-t">
-                <Pagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  onPageChange={setCurrentPage}
-                />
-              </div>
+            <div className="p-4 border-t">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            </div>
           </>
         )}
       </div>
+
+      {/* Edit Modal */}
+      {editingReceipt && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 p-4 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-full">
+                  <FaEdit className="h-5 w-5 text-white" />
+                </div>
+                <h3 className="text-lg font-bold text-white">ویرایش رسید</h3>
+              </div>
+              <button
+                onClick={closeEditModal}
+                className="p-1 text-white/80 hover:text-white hover:bg-white/20 rounded-full transition"
+              >
+                <FaTimes />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleEditSubmit} className="p-6 space-y-4">
+              {/* Buyer Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  خریدار <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={editBuyerId}
+                  onChange={(e) => setEditBuyerId(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
+                  required
+                >
+                  <option value="">-- انتخاب کنید --</option>
+                  {buyersWithUnpaid.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.fullname} (بدهی: {b.due.toFixed(2)} ؋)
+                    </option>
+                  ))}
+                  {/* If the receipt's buyer is not in the unpaid list, show them too */}
+                  {!buyersWithUnpaid.some((b) => b.id === parseInt(editBuyerId, 10)) &&
+                    editingReceipt.buyerId && (
+                      <option value={editingReceipt.buyerId}>
+                        {getBuyerName(editingReceipt.buyerId)}
+                      </option>
+                    )}
+                </select>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  مبلغ (؋) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
+                  required
+                />
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">توضیحات</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows="3"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition"
+                  placeholder="توضیحات اختیاری..."
+                />
+              </div>
+
+              {editError && (
+                <div className="bg-red-50 text-red-700 p-3 rounded-lg text-sm border border-red-200">
+                  {editError}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+                >
+                  انصراف
+                </button>
+                <button
+                  type="submit"
+                  disabled={editLoading}
+                  className="px-5 py-2 bg-gradient-to-r from-cyan-800 to-cyan-600 text-white rounded-lg hover:from-cyan-900 hover:to-cyan-700 transition font-medium shadow-md disabled:opacity-50 flex items-center gap-2"
+                >
+                  {editLoading ? (
+                    <>
+                      <FaSpinner className="animate-spin" />
+                      در حال ذخیره...
+                    </>
+                  ) : (
+                    <>
+                      <FaSave />
+                      ذخیره تغییرات
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Success/Error messages */}
       {success && (

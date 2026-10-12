@@ -36,7 +36,7 @@ const syncBuyerAccountBills = async (buyerId, transaction) => {
     attributes: ['id', 'remainingAmount'],
     transaction,
   });
-  
+
   const remaindIds = [];
   const receiptSaleIds = [];
   for (const bill of allBills) {
@@ -47,9 +47,9 @@ const syncBuyerAccountBills = async (buyerId, transaction) => {
       receiptSaleIds.push(bill.id);
     }
   }
-  
+
   const has_remaindIds = remaindIds.length > 0;
-  
+
   await BuyerAccount.update(
     {
       remaindIds,
@@ -116,7 +116,7 @@ export const createReceipt = async (req, res) => {
 
       // Add receipt ID to BuyerAccount.receiptIds
       await addReceiptToBuyerAccount(buyerId, receipt.id, transaction);
-      
+
       // Sync remaindIds and receiptSaleIds based on updated bill statuses
       await syncBuyerAccountBills(buyerId, transaction);
 
@@ -165,30 +165,51 @@ export const getAllReceipts = async (req, res) => {
   }
 };
 
-
-
-// UPDATE a receipt (e.g., amount, description)
 export const updateReceipt = async (req, res) => {
   const { id } = req.params;
-  const { amountofmoney, description } = req.body;
+  const { amountofmoney, description, buyerId } = req.body;
 
   try {
     const receipt = await Receipt.findByPk(id);
     if (!receipt) return res.status(404).json({ message: "Receipt not found" });
 
+    // Validate amount if provided
     if (amountofmoney !== undefined) {
-      try { validateAmount(amountofmoney); } catch (err) { return res.status(400).json({ message: err.message }); }
+      try {
+        validateAmount(amountofmoney);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
     }
 
-    // Important: changing payment amount would require redistributing across bills.
-    // For simplicity, we only allow updating description here.
-    // If amount needs to change, delete and recreate.
-    if (amountofmoney !== undefined && parseFloat(amountofmoney) !== parseFloat(receipt.amountofmoney)) {
-      return res.status(400).json({ message: "Updating amount is not allowed. Delete and create new receipt instead." });
+    // Validate buyer if provided
+    if (buyerId !== undefined) {
+      const buyer = await Buyer.findByPk(buyerId);
+      if (!buyer) {
+        return res.status(400).json({ message: "Buyer not found" });
+      }
     }
 
-    await receipt.update({ description: description?.trim() || null });
-    res.json({ message: "Receipt updated", receipt });
+    // Build the update payload with only the fields that were sent
+    const updateData = {};
+    if (amountofmoney !== undefined) {
+      updateData.amountofmoney = parseFloat(amountofmoney);
+    }
+    if (description !== undefined) {
+      updateData.description = description?.trim() || null;
+    }
+    if (buyerId !== undefined) {
+      updateData.buyerId = buyerId;
+    }
+
+    // Nothing to update
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: "No fields provided for update" });
+    }
+
+    await receipt.update(updateData);
+
+    res.json({ message: "Receipt updated successfully", receipt });
   } catch (error) {
     res.status(500).json({ message: "Error updating receipt", error: error.message });
   }

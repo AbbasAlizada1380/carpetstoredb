@@ -1,8 +1,8 @@
 import sequelize from "../../dbconnection.js";
-import {Customer} from "../../Models/index.js";
+import { Customer } from "../../Models/index.js";
 import Exist from "../../Models/Stock/exist.js";
 import { Op } from "sequelize";
-import { Bill, Buyer, Sells, Category, Income } from "../../Models/index.js"; // ensure Sells is imported
+import { Bill, Buyer, Sells, Category, Income, Type } from "../../Models/index.js"; // ensure Sells is imported
 /* ===============================
    GET ALL BILLS (with customer, sells items, products)
 ================================ */
@@ -88,6 +88,7 @@ export const getAllBills = async (req, res) => {
 export const getBillById = async (req, res) => {
   try {
     const { id } = req.params;
+
     const bill = await Bill.findByPk(id, {
       include: [
         {
@@ -107,12 +108,47 @@ export const getBillById = async (req, res) => {
     if (bill.sells && Array.isArray(bill.sells) && bill.sells.length > 0) {
       sells = await Sells.findAll({
         where: { id: bill.sells },
+        include: [
+          {
+            model: Category,
+            as: "categoryDetail",           // matches association: Sells.belongsTo(Category, { as: "categoryDetail" })
+            attributes: ["id", "name", "typeId"],
+            include: [
+              {
+                model: Type,
+                as: "type",                 // matches association: Category.belongsTo(Type, { as: "type" })
+                attributes: ["id", "name"],
+              },
+            ],
+          },
+          {
+            model: Income,
+            as: "income",                   // matches association: Sells.belongsTo(Income, { as: "income" })
+            attributes: ["id", "length", "width", "area", "unit_price", "color", "degree", "lotNumber"],
+          },
+        ],
       });
     }
 
     // Convert bill to plain object and attach the sells array
     const billData = bill.toJSON();
-    billData.sells = sells;   // or billData.items = sells
+
+    // Normalize the sells output so each item exposes category + type directly
+    billData.sells = sells.map((sell) => {
+      const plain = sell.toJSON();
+      const category = plain.categoryDetail || null;
+      const type = category?.type || null;
+
+      return {
+        ...plain,
+        category: category
+          ? { id: category.id, name: category.name }
+          : null,
+        type: type
+          ? { id: type.id, name: type.name }
+          : null,
+      };
+    });
 
     res.json({ success: true, bill: billData });
   } catch (error) {
@@ -120,7 +156,6 @@ export const getBillById = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
-
 /* ===============================
    GET BILLS BY DATE RANGE
 ================================ */
@@ -326,5 +361,50 @@ export const getFilteredBills = async (req, res) => {
   } catch (error) {
     console.error("Error in getFilteredBills:", error);
     res.status(500).json({ success: false, message: "Failed to fetch filtered bills", error: error.message });
+  }
+};
+
+export const deleteBill = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+
+    const bill = await Bill.findByPk(id, { transaction });
+    if (!bill) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: "Bill not found" });
+    }
+
+    // Grab sell IDs stored on the bill (array of integers)
+    const sellIds = Array.isArray(bill.sells) ? bill.sells : [];
+
+    // Delete the bill first
+    await bill.destroy({ transaction });
+
+    // Delete the associated sells (if any)
+    let deletedSellsCount = 0;
+    if (sellIds.length > 0) {
+      deletedSellsCount = await Sells.destroy({
+        where: { id: sellIds },
+        transaction,
+      });
+    }
+
+    await transaction.commit();
+
+    return res.json({
+      success: true,
+      message: "Bill deleted successfully",
+      deletedBillId: parseInt(id, 10),
+      deletedSellsCount,
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Error in deleteBill:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete bill",
+      error: error.message,
+    });
   }
 };

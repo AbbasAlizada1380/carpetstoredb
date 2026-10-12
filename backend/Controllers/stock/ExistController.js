@@ -135,7 +135,6 @@ export const getExistBySize = async (req, res) => {
 export const updateExist = async (req, res) => {
   try {
     const { id } = req.params;
-    const { size, quantity } = req.body;
 
     const existRecord = await Exist.findByPk(id);
 
@@ -146,23 +145,58 @@ export const updateExist = async (req, res) => {
       });
     }
 
-    // If size is being updated, check for duplicates
-    if (size && size !== existRecord.size) {
-      const existingSize = await Exist.findOne({ where: { size } });
-      if (existingSize && existingSize.id !== parseInt(id)) {
-        return res.status(400).json({
-          success: false,
-          message: "Size already exists",
-        });
+    // Fields that are allowed to be updated
+    const allowedFields = [
+      "quantity",
+      "length",
+      "width",
+      "area",
+      "unit_price",
+      "color",
+      "degree",
+      "lotNumber",
+      "categoryId",
+      "typeId",
+      "customerId",
+      // add other fields from your Exist model here
+    ];
+
+    // Build the update payload from only the allowed fields present in the body
+    const updateData = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
       }
     }
 
-    // Update record
-    const updatedData = {};
-    if (size !== undefined) updatedData.size = size;
-    if (quantity !== undefined) updatedData.quantity = quantity;
+    // Numeric validation for the fields that must be numbers
+    const numericFields = ["quantity", "length", "width", "area", "unit_price", "categoryId", "typeId", "customerId"];
+    for (const field of numericFields) {
+      if (updateData[field] !== undefined && updateData[field] !== null && updateData[field] !== "") {
+        const parsed = parseFloat(updateData[field]);
+        if (isNaN(parsed) || parsed < 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid value for ${field}`,
+          });
+        }
+        // integer fields
+        if (["quantity", "categoryId", "typeId", "customerId"].includes(field)) {
+          updateData[field] = parseInt(updateData[field], 10);
+        } else {
+          updateData[field] = parsed;
+        }
+      }
+    }
 
-    await existRecord.update(updatedData);
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid fields provided for update",
+      });
+    }
+
+    await existRecord.update(updateData);
 
     res.status(200).json({
       success: true,

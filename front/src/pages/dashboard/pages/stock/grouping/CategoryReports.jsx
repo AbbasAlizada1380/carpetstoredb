@@ -10,58 +10,152 @@ const CategoryReports = () => {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState("");
+
+  // ─── Edit state ───
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+
   const BASE_URL = import.meta.env.VITE_BASE_URL;
 
-  useEffect(() => {
-    const fetchReports = async () => {
-      try {
-        const [carpetRes, blanketRes] = await Promise.all([
-          fetch(`${BASE_URL}/category/reports`),
-          fetch(`${BASE_URL}/bexist?limit=1000`),
-        ]);
+  const fetchReports = async () => {
+    try {
+      const [carpetRes, blanketRes] = await Promise.all([
+        fetch(`${BASE_URL}/category/reports`),
+        fetch(`${BASE_URL}/bexist?limit=1000`),
+      ]);
 
-        if (!carpetRes.ok) throw new Error(`Carpet reports HTTP error! status: ${carpetRes.status}`);
-        if (!blanketRes.ok) throw new Error(`Blanket stock HTTP error! status: ${blanketRes.status}`);
+      if (!carpetRes.ok) throw new Error(`Carpet reports HTTP error! status: ${carpetRes.status}`);
+      if (!blanketRes.ok) throw new Error(`Blanket stock HTTP error! status: ${blanketRes.status}`);
 
-        const carpetData = await carpetRes.json();
-        const blanketData = await blanketRes.json();
+      const carpetData = await carpetRes.json();
+      const blanketData = await blanketRes.json();
 
-        // ─── Process Carpet Data ───
-        if (carpetData && typeof carpetData === "object" && !Array.isArray(carpetData)) {
-          setCategories(carpetData.categories || []);
-          setCarpetTotalValue(carpetData.totalStockValue ?? 0);
-        } else if (Array.isArray(carpetData)) {
-          setCategories(carpetData);
-          const computedTotal = carpetData.reduce(
-            (sum, cat) => sum + (cat.summary?.totalStockValue || 0),
-            0
-          );
-          setCarpetTotalValue(computedTotal);
-        } else {
-          setCategories([]);
-          setCarpetTotalValue(0);
-        }
-
-        // ─── Process Blanket Stock Data ───
-        const stockItems = blanketData?.data || [];
-        setBlanketStock(stockItems);
-
-        const totalBlanketValue = stockItems.reduce((sum, item) => {
-          const qty = parseFloat(item.quantity) || 0;
-          const price = parseFloat(item.unitPrice) || 0;
-          return sum + qty * price;
-        }, 0);
-        setBlanketTotalValue(totalBlanketValue);
-
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
+      // ─── Process Carpet Data ───
+      if (carpetData && typeof carpetData === "object" && !Array.isArray(carpetData)) {
+        setCategories(carpetData.categories || []);
+        setCarpetTotalValue(carpetData.totalStockValue ?? 0);
+      } else if (Array.isArray(carpetData)) {
+        setCategories(carpetData);
+        const computedTotal = carpetData.reduce(
+          (sum, cat) => sum + (cat.summary?.totalStockValue || 0),
+          0
+        );
+        setCarpetTotalValue(computedTotal);
+      } else {
+        setCategories([]);
+        setCarpetTotalValue(0);
       }
-    };
 
+      // ─── Process Blanket Stock Data ───
+      const stockItems = blanketData?.data || [];
+      setBlanketStock(stockItems);
+
+      const totalBlanketValue = stockItems.reduce((sum, item) => {
+        const qty = parseFloat(item.quantity) || 0;
+        const price = parseFloat(item.unitPrice) || 0;
+        return sum + qty * price;
+      }, 0);
+      setBlanketTotalValue(totalBlanketValue);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchReports();
   }, []);
+
+  // ─── Start editing a roll ───
+  const startEdit = (inc) => {
+    setEditingId(inc.id);
+    setEditForm({
+      length: inc.length ?? "",
+      width: inc.width ?? "",
+      area: inc.area ?? "",
+      unit_price: inc.unit_price ?? "",
+      color: inc.color ?? "",
+      degree: inc.degree ?? "",
+      lotNumber: inc.lotNumber ?? "",
+    });
+    setEditError("");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm({});
+    setEditError("");
+  };
+
+  const handleEditChange = (field, value) => {
+    setEditForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // Auto-calculate area when length/width change
+  const handleDimensionChange = (field, value) => {
+    setEditForm((prev) => {
+      const next = { ...prev, [field]: value };
+      const len = parseFloat(field === "length" ? value : next.length);
+      const wid = parseFloat(field === "width" ? value : next.width);
+      if (!isNaN(len) && !isNaN(wid) && len > 0 && wid > 0) {
+        next.area = (len * wid).toFixed(2);
+      }
+      return next;
+    });
+  };
+
+  // ─── Save the edited roll ───
+  const handleSave = async (incId) => {
+    // Validation
+    const len = parseFloat(editForm.length);
+    const wid = parseFloat(editForm.width);
+    const area = parseFloat(editForm.area);
+    const price = parseFloat(editForm.unit_price);
+
+    if ([len, wid, area, price].some((v) => isNaN(v) || v < 0)) {
+      setEditError("لطفاً مقادیر عددی معتبر وارد کنید");
+      return;
+    }
+
+    setSaving(true);
+    setEditError("");
+    try {
+      const payload = {
+        length: len,
+        width: wid,
+        area: area,
+        unit_price: price,
+        color: editForm.color?.trim() || null,
+        degree: editForm.degree?.trim() || null,
+        lotNumber: editForm.lotNumber?.trim() || null,
+      };
+
+      const res = await fetch(`${BASE_URL}/income/${incId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || "خطا در ذخیره تغییرات");
+      }
+
+      setSuccess("رول فرش با موفقیت ویرایش شد");
+      setEditingId(null);
+      setEditForm({});
+      await fetchReports();
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (err) {
+      setEditError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -123,7 +217,20 @@ const CategoryReports = () => {
         ) : (
           <div className="space-y-8">
             {categories.map((category) => (
-              <CategoryCard key={category.id} category={category} currency="دالر" />
+              <CategoryCard
+                key={category.id}
+                category={category}
+                currency="دالر"
+                editingId={editingId}
+                editForm={editForm}
+                saving={saving}
+                editError={editError}
+                onStartEdit={startEdit}
+                onCancelEdit={cancelEdit}
+                onEditChange={handleEditChange}
+                onDimensionChange={handleDimensionChange}
+                onSave={handleSave}
+              />
             ))}
           </div>
         )}
@@ -194,12 +301,33 @@ const CategoryReports = () => {
           </div>
         )}
       </div>
+
+      {/* Success toast */}
+      {success && (
+        <div className="fixed bottom-4 right-4 bg-green-100 border border-green-400 text-green-700 px-4 py-2 rounded-lg shadow-lg z-50">
+          {success}
+        </div>
+      )}
     </div>
   );
 };
 
 // ─── Sub‑component: Category Card (for carpet) ───
-const CategoryCard = ({ category, currency }) => {
+const CategoryCard = ({
+  category,
+  currency,
+  editingId,
+  editForm,
+  saving,
+  editError,
+  onStartEdit,
+  onCancelEdit,
+  onEditChange,
+  onDimensionChange,
+  onSave,
+}) => {
+  const isEditing = (id) => editingId === id;
+
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200 transition hover:shadow-lg">
       <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-6 py-4 border-b flex justify-between items-center flex-wrap gap-2">
@@ -243,10 +371,109 @@ const CategoryCard = ({ category, currency }) => {
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">شماره لات</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">شناسه مشتری</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">تاریخ ایجاد</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">عملیات</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {category.existingIncomes.map((inc) => {
+                  const editing = isEditing(inc.id);
+
+                  if (editing) {
+                    return (
+                      <tr key={inc.id} className="bg-yellow-50">
+                        <td className="px-4 py-2 whitespace-nowrap text-sm font-mono text-gray-900">{inc.id}</td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="number"
+                            step="any"
+                            value={editForm.length}
+                            onChange={(e) => onDimensionChange("length", e.target.value)}
+                            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="number"
+                            step="any"
+                            value={editForm.width}
+                            onChange={(e) => onDimensionChange("width", e.target.value)}
+                            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="number"
+                            step="any"
+                            value={editForm.area}
+                            onChange={(e) => onEditChange("area", e.target.value)}
+                            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="number"
+                            step="any"
+                            value={editForm.unit_price}
+                            onChange={(e) => onEditChange("unit_price", e.target.value)}
+                            className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2 whitespace-nowrap text-sm font-semibold text-green-700">
+                          {((parseFloat(editForm.area) || 0) * (parseFloat(editForm.unit_price) || 0)).toLocaleString()} {currency}
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="text"
+                            value={editForm.color}
+                            onChange={(e) => onEditChange("color", e.target.value)}
+                            className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="text"
+                            value={editForm.degree}
+                            onChange={(e) => onEditChange("degree", e.target.value)}
+                            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="text"
+                            value={editForm.lotNumber}
+                            onChange={(e) => onEditChange("lotNumber", e.target.value)}
+                            className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
+                          />
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.customerId}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(inc.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={() => onSave(inc.id)}
+                              disabled={saving}
+                              className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-50"
+                            >
+                              {saving ? "..." : "ذخیره"}
+                            </button>
+                            <button
+                              onClick={onCancelEdit}
+                              disabled={saving}
+                              className="px-3 py-1 bg-gray-400 text-white text-xs rounded hover:bg-gray-500 disabled:opacity-50"
+                            >
+                              انصراف
+                            </button>
+                            {editError && (
+                              <span className="text-[10px] text-red-600">{editError}</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
                   const area = parseFloat(inc.area) || 0;
                   const unitPrice = parseFloat(inc.unit_price) || 0;
                   const itemValue = area * unitPrice;
@@ -266,6 +493,14 @@ const CategoryCard = ({ category, currency }) => {
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.customerId}</td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
                         {new Date(inc.createdAt).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <button
+                          onClick={() => onStartEdit(inc)}
+                          className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                        >
+                          ویرایش
+                        </button>
                       </td>
                     </tr>
                   );
