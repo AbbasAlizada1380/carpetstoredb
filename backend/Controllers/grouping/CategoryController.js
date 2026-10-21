@@ -142,8 +142,47 @@ export const deleteCategory = async (req, res) => {
   }
 };
 
-// Add to your category controller file
+// ========== HELPER: Remove zero-area income IDs from category EIncome ==========
+export const removeZeroAreaIncomesFromCategory = async (incomes, categoryId = null) => {
+  // Filter incomes that have area === 0 (handle number and string)
+  const zeroAreaIncomes = (incomes || []).filter(
+    (inc) => Number(inc.area) === 0
+  );
 
+  if (zeroAreaIncomes.length === 0) return { removed: 0, categories: [] };
+
+  const zeroAreaIds = zeroAreaIncomes.map((inc) => inc.id);
+
+  // Group zero-area income ids by the category they belong to.
+  // Use the passed categoryId if provided, otherwise infer from income.categoryId (if exists).
+  const categoryIds = categoryId
+    ? [categoryId]
+    : [...new Set(zeroAreaIncomes.map((inc) => inc.categoryId).filter(Boolean))];
+
+  const updatedCategories = [];
+
+  for (const catId of categoryIds) {
+    const category = await Category.findByPk(catId);
+    if (!category) continue;
+
+    let incomeIds = category.EIncome;
+    if (typeof incomeIds === "string") incomeIds = JSON.parse(incomeIds);
+    if (!Array.isArray(incomeIds)) continue;
+
+    const filteredIds = incomeIds.filter(
+      (id) => !zeroAreaIds.includes(id)
+    );
+
+    if (filteredIds.length !== incomeIds.length) {
+      category.EIncome = filteredIds;
+      await category.save();
+      updatedCategories.push(catId);
+    }
+  }
+
+  return { removed: zeroAreaIds.length, categories: updatedCategories };
+};
+// ========== GET INCOMES BY CATEGORY ID ==========
 // ========== GET INCOMES BY CATEGORY ID ==========
 export const getIncomesByCategory = async (req, res) => {
   try {
@@ -156,16 +195,34 @@ export const getIncomesByCategory = async (req, res) => {
 
     // Parse EIncome array (it's stored as JSON in DB)
     let incomeIds = category.EIncome;
-    if (typeof incomeIds === 'string') incomeIds = JSON.parse(incomeIds);
+    if (typeof incomeIds === "string") incomeIds = JSON.parse(incomeIds);
     if (!Array.isArray(incomeIds) || incomeIds.length === 0) {
       return res.status(200).json([]);
     }
 
     // Fetch Income records
-    const incomes = await Income.findAll({
+    let incomes = await Income.findAll({
       where: { id: incomeIds },
       order: [["createdAt", "DESC"]],
     });
+
+    // Remove incomes with area === 0 from this category's EIncome
+    const { removed } = await removeZeroAreaIncomesFromCategory(incomes, id);
+
+    if (removed > 0) {
+      // Re-fetch the category to get the updated EIncome
+      const updatedCategory = await Category.findByPk(id);
+      let updatedIds = updatedCategory.EIncome;
+      if (typeof updatedIds === "string") updatedIds = JSON.parse(updatedIds);
+      if (!Array.isArray(updatedIds)) updatedIds = [];
+
+      incomes = updatedIds.length
+        ? await Income.findAll({
+          where: { id: updatedIds },
+          order: [["createdAt", "DESC"]],
+        })
+        : [];
+    }
 
     res.status(200).json(incomes);
   } catch (error) {
