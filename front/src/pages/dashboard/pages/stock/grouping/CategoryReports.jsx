@@ -12,11 +12,17 @@ const CategoryReports = () => {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState("");
 
-  // ─── Edit state ───
+  // ─── Carpet edit state ───
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
+
+  // ─── Blanket edit state (separate so they don't collide) ───
+  const [blanketEditingId, setBlanketEditingId] = useState(null);
+  const [blanketEditForm, setBlanketEditForm] = useState({});
+  const [blanketSaving, setBlanketSaving] = useState(false);
+  const [blanketEditError, setBlanketEditError] = useState("");
 
   const BASE_URL = import.meta.env.VITE_BASE_URL;
 
@@ -70,7 +76,7 @@ const CategoryReports = () => {
     fetchReports();
   }, []);
 
-  // ─── Start editing a roll ───
+  // ─── Start editing a carpet roll ───
   const startEdit = (inc) => {
     setEditingId(inc.id);
     setEditForm({
@@ -95,7 +101,6 @@ const CategoryReports = () => {
     setEditForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  // Auto-calculate area when length/width change
   const handleDimensionChange = (field, value) => {
     setEditForm((prev) => {
       const next = { ...prev, [field]: value };
@@ -108,9 +113,8 @@ const CategoryReports = () => {
     });
   };
 
-  // ─── Save the edited roll ───
+  // ─── Save the edited carpet roll ───
   const handleSave = async (incId) => {
-    // Validation
     const len = parseFloat(editForm.length);
     const wid = parseFloat(editForm.width);
     const area = parseFloat(editForm.area);
@@ -157,6 +161,69 @@ const CategoryReports = () => {
     }
   };
 
+  // ─── Blanket edit handlers ───
+  const startBlanketEdit = (item) => {
+    setBlanketEditingId(item.id);
+    setBlanketEditForm({
+      quantity: item.quantity ?? "",
+      unitPrice: item.unitPrice ?? "",
+      // add more fields here if your /bexist update endpoint accepts them
+    });
+    setBlanketEditError("");
+  };
+
+  const cancelBlanketEdit = () => {
+    setBlanketEditingId(null);
+    setBlanketEditForm({});
+    setBlanketEditError("");
+  };
+
+  const handleBlanketEditChange = (field, value) => {
+    setBlanketEditForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleBlanketSave = async (itemId) => {
+    const qty = parseFloat(blanketEditForm.quantity);
+    const price = parseFloat(blanketEditForm.unitPrice);
+
+    if ([qty, price].some((v) => isNaN(v) || v < 0)) {
+      setBlanketEditError("لطفاً مقادیر عددی معتبر وارد کنید");
+      return;
+    }
+
+    setBlanketSaving(true);
+    setBlanketEditError("");
+    try {
+      const payload = {
+        quantity: qty,
+        unitPrice: price,
+        // add categoryId etc. here if your API needs them
+      };
+
+      // ⚠️ Adjust this URL to match your blanket update endpoint
+      const res = await fetch(`${BASE_URL}/bexist/${itemId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || "خطا در ذخیره تغییرات کمپل");
+      }
+
+      setSuccess("موجودی کمپل با موفقیت ویرایش شد");
+      setBlanketEditingId(null);
+      setBlanketEditForm({});
+      await fetchReports();
+      setTimeout(() => setSuccess(""), 3000);
+    } catch (err) {
+      setBlanketEditError(err.message);
+    } finally {
+      setBlanketSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -181,7 +248,7 @@ const CategoryReports = () => {
         گزارش‌های موجودی
       </h1>
 
-      {/* ─── Total Values (separate currencies) ─── */}
+      {/* ─── Total Values ─── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -203,7 +270,7 @@ const CategoryReports = () => {
         </div>
       </div>
 
-      {/* ─── Carpet Section ─── */}
+      {/* ─── Carpet Section (unchanged) ─── */}
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-gray-800 border-b border-gray-200 pb-2 mb-4 flex items-center gap-3">
           <span>🧶</span> گزارش موجودی فرش‌ها
@@ -236,7 +303,7 @@ const CategoryReports = () => {
         )}
       </div>
 
-      {/* ─── Blanket Section ─── */}
+      {/* ─── Blanket Section (now editable) ─── */}
       <div className="mt-12 pt-8 border-t-2 border-dashed border-gray-300">
         <h2 className="text-2xl font-bold text-gray-800 border-b border-gray-200 pb-2 mb-4 flex items-center gap-3">
           <span>🧵</span> گزارش موجودی کمپل (بلنکت)
@@ -254,6 +321,7 @@ const CategoryReports = () => {
               const qty = parseFloat(item.quantity) || 0;
               const price = parseFloat(item.unitPrice) || 0;
               const totalValue = qty * price;
+              const editing = blanketEditingId === item.id;
 
               return (
                 <div
@@ -279,18 +347,82 @@ const CategoryReports = () => {
                             <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">تعداد (واحد)</th>
                             <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">قیمت واحد (افغانی)</th>
                             <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">ارزش کل (افغانی)</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">عملیات</th>
                           </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                          <tr className="hover:bg-gray-50 transition">
-                            <td className="px-4 py-2 whitespace-nowrap text-sm font-mono text-gray-900">{item.id}</td>
-                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{category?.name || item.categoryId}</td>
-                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{qty}</td>
-                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{price.toFixed(2)}</td>
-                            <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-purple-700">
-                              {totalValue.toLocaleString()} افغانی
-                            </td>
-                          </tr>
+                          {editing ? (
+                            <tr className="bg-yellow-50">
+                              <td className="px-4 py-2 whitespace-nowrap text-sm font-mono text-gray-900">{item.id}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">
+                                {category?.name || item.categoryId}
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={blanketEditForm.quantity}
+                                  onChange={(e) => handleBlanketEditChange("quantity", e.target.value)}
+                                  className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-purple-500"
+                                />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={blanketEditForm.unitPrice}
+                                  onChange={(e) => handleBlanketEditChange("unitPrice", e.target.value)}
+                                  className="w-28 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-purple-500"
+                                />
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-purple-700">
+                                {(
+                                  (parseFloat(blanketEditForm.quantity) || 0) *
+                                  (parseFloat(blanketEditForm.unitPrice) || 0)
+                                ).toLocaleString()}{" "}
+                                افغانی
+                              </td>
+                              <td className="px-2 py-2 whitespace-nowrap">
+                                <div className="flex flex-col gap-1">
+                                  <button
+                                    onClick={() => handleBlanketSave(item.id)}
+                                    disabled={blanketSaving}
+                                    className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-50"
+                                  >
+                                    {blanketSaving ? "..." : "ذخیره"}
+                                  </button>
+                                  <button
+                                    onClick={cancelBlanketEdit}
+                                    disabled={blanketSaving}
+                                    className="px-3 py-1 bg-gray-400 text-white text-xs rounded hover:bg-gray-500 disabled:opacity-50"
+                                  >
+                                    انصراف
+                                  </button>
+                                  {blanketEditError && (
+                                    <span className="text-[10px] text-red-600">{blanketEditError}</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ) : (
+                            <tr className="hover:bg-gray-50 transition">
+                              <td className="px-4 py-2 whitespace-nowrap text-sm font-mono text-gray-900">{item.id}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{category?.name || item.categoryId}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{qty}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{price.toFixed(2)}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-purple-700">
+                                {totalValue.toLocaleString()} افغانی
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap">
+                                <button
+                                  onClick={() => startBlanketEdit(item)}
+                                  className="px-3 py-1 bg-purple-600 text-white text-xs rounded hover:bg-purple-700"
+                                >
+                                  ویرایش
+                                </button>
+                              </td>
+                            </tr>
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -312,7 +444,7 @@ const CategoryReports = () => {
   );
 };
 
-// ─── Sub‑component: Category Card (for carpet) ───
+// ─── Sub‑component: Category Card (for carpet) — unchanged ───
 const CategoryCard = ({
   category,
   currency,
