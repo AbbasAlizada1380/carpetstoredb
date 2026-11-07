@@ -51,7 +51,6 @@ const CombinedReportsDownload = () => {
 
     const paymentsPromise = axios.get(`${BASE_URL}/pay/filter?${params.toString()}`).then(res => res.data.data || []);
     const receiptsPromise = axios.get(`${BASE_URL}/receipt/filter?${params.toString()}`).then(res => res.data || []);
-    // ─── Expenses API with split ──────────────────────────────────
     const expensesPromise = axios.get(`${BASE_URL}/expense/date_range?${expenseParams.toString()}`).then(res => res.data);
     const salariesPromise = axios.get(`${BASE_URL}/attendance/date-range?${expenseParams.toString()}`).then(res => res.data.data || []);
     const otherIncomePromise = axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`).then(res => res.data.data || []);
@@ -73,7 +72,6 @@ const CombinedReportsDownload = () => {
       paymentsPromise, receiptsPromise, expensesPromise, salariesPromise, otherIncomePromise, categoryPromise, bexistPromise
     ]);
 
-    // ─── Extract expense groups ──────────────────────────────────────
     const calculatedExpenses = expensesData.calculated?.items || [];
     const nonCalculatedExpenses = expensesData.nonCalculated?.items || [];
     const totalCalculated = expensesData.calculated?.total || 0;
@@ -83,7 +81,7 @@ const CombinedReportsDownload = () => {
     return {
       payments,
       receipts,
-      expenses: expensesData.expenses || [], // fallback
+      expenses: expensesData.expenses || [],
       calculatedExpenses,
       nonCalculatedExpenses,
       totalCalculated,
@@ -96,391 +94,381 @@ const CombinedReportsDownload = () => {
     };
   };
 
-  const ensureSpace = (doc, startY, lines = 1, lineHeight = 16) => {
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const neededSpace = lines * lineHeight + 10;
-    if (startY + neededSpace > pageHeight - PAGE_MARGIN_BOTTOM) {
-      doc.addPage();
-      return PAGE_MARGIN_TOP;
+// ─── Helpers ─────────────────────────────────────────────
+const ensureSpace = (doc, startY, lines = 1, lineHeight = 16) => {
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const neededSpace = lines * lineHeight + 10;
+  if (startY + neededSpace > pageHeight - PAGE_MARGIN_BOTTOM) {
+    doc.addPage();
+    return PAGE_MARGIN_TOP;
+  }
+  return startY;
+};
+
+const drawDivider = (doc, y) => {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  if (y + 20 > pageHeight - PAGE_MARGIN_BOTTOM) {
+    doc.addPage();
+    y = PAGE_MARGIN_TOP;
+  }
+  doc.setDrawColor(180, 180, 180);
+  doc.setLineWidth(0.8);
+  doc.line(PAGE_MARGIN_LEFT_RIGHT, y + 5, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y + 5);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.2);
+  return y + 20;
+};
+
+// 🔹 NEW: force a new page and return the starting Y for it
+const startNewPage = (doc) => {
+  doc.addPage();
+  return PAGE_MARGIN_TOP;
+};
+
+// ─── PDF ─────────────────────────────────────────────────
+const handlePDFDownload = async () => {
+  if (!fromDate || !toDate) {
+    alert("لطفاً بازه زمانی را انتخاب کنید");
+    return;
+  }
+
+  try {
+    setLoading(true);
+    const {
+      payments, receipts, calculatedExpenses, nonCalculatedExpenses,
+      totalCalculated, totalNonCalculated, totalExpensesAll,
+      salaries, otherIncomes, categoryData, blanketStock,
+    } = await fetchAllData();
+
+    const paymentsAFS = payments.filter(p => p.is_Afs === true);
+    const paymentsUSD = payments.filter(p => p.is_Afs === false);
+    const totalPaymentsAFS = paymentsAFS.reduce((s, p) => s + parseNumber(p.amountofmoney), 0);
+    const totalPaymentsUSD = paymentsUSD.reduce((s, p) => s + parseNumber(p.amountofmoney), 0);
+    const totalPaymentsAFNCombined = totalPaymentsAFS + totalPaymentsUSD * exchangeRate;
+
+    const totalReceipts = receipts.reduce((s, r) => s + parseNumber(r.amountofmoney), 0);
+    const totalOtherIncomes = otherIncomes.reduce((s, inc) => s + parseNumber(inc.amount), 0);
+    const totalStockUSD = categoryData.totalStockValue || 0;
+
+    const totalBlanketAFN = blanketStock.reduce((sum, item) => sum + parseNumber(item.totalValue), 0);
+    const totalStockAFN = totalStockUSD * exchangeRate + totalBlanketAFN;
+    const balance =
+      totalReceipts + totalOtherIncomes + totalStockAFN +
+      totalCalculated - totalNonCalculated - totalPaymentsAFNCombined;
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    doc.setR2L(false);
+    doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
+    doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
+    doc.setFont("Vazirmatn");
+
+    const today = moment().format("YYYY/MM/DD");
+    const dateRangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
+
+    // ─── Cover header (page 1) ─────────────────────────────
+    doc.setFontSize(14);
+    doc.text(`گزارش جامع (${dateRangeStr})`, doc.internal.pageSize.getWidth() - 40, 40, { align: "right" });
+    doc.setFontSize(10);
+    doc.text(`تاریخ تولید: ${today}`, doc.internal.pageSize.getWidth() - 40, 60, { align: "right" });
+    doc.text(`نرخ تبدیل (۱$ = ${exchangeRate} ؋)`, doc.internal.pageSize.getWidth() - 40, 75, { align: "right" });
+
+    let startY = 95;
+
+    const addSectionTitle = (title, y) => {
+      y = ensureSpace(doc, y, 1, 20);
+      doc.setFontSize(12);
+      doc.setTextColor(40, 40, 40);
+      doc.text(title, doc.internal.pageSize.getWidth() - 40, y, { align: "right" });
+      return y + 20;
+    };
+
+    /* ─────────────── 1. Payments ─────────────── */
+    startY = addSectionTitle("گزارش پرداخت‌ها به فروشندگان", startY);
+    if (payments.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ پرداختی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["ID", "فروشنده", "مبلغ", "واحد پول", "توضیحات", "تاریخ"]],
+        body: payments.map((p) => [
+          p.id,
+          p.customer?.fullname || `فروشنده ${p.customerId}`,
+          p.amountofmoney,
+          p.is_Afs !== false ? "افغانی" : "دلار",
+          p.description || "-",
+          moment(p.createdAt).format("YYYY/MM/DD"),
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 3);
+      doc.setFontSize(11);
+      doc.text(`جمع پرداخت‌ها به افغانی: ${totalPaymentsAFS.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" }); startY += 15;
+      doc.text(`جمع پرداخت‌ها به دلار: $${totalPaymentsUSD.toLocaleString()} (≈ ${(totalPaymentsUSD * exchangeRate).toLocaleString()} ؋)`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" }); startY += 15;
+      doc.text(`جمع کل پرداخت‌ها (به افغانی): ${totalPaymentsAFNCombined.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" }); startY += 20;
     }
-    return startY;
-  };
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-  // ─── PDF ──────────────────────────────────────────────────────────────
-  const handlePDFDownload = async () => {
-    if (!fromDate || !toDate) {
-      alert("لطفاً بازه زمانی را انتخاب کنید");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const {
-        payments,
-        receipts,
-        calculatedExpenses,
-        nonCalculatedExpenses,
-        totalCalculated,
-        totalNonCalculated,
-        totalExpensesAll,
-        salaries,
-        otherIncomes,
-        categoryData,
-        blanketStock,
-      } = await fetchAllData();
-
-      // ─── Payments split ──────────────────────────────────────────────
-      const paymentsAFS = payments.filter(p => p.is_Afs === true);
-      const paymentsUSD = payments.filter(p => p.is_Afs === false);
-      const totalPaymentsAFS = paymentsAFS.reduce((s, p) => s + parseNumber(p.amountofmoney), 0);
-      const totalPaymentsUSD = paymentsUSD.reduce((s, p) => s + parseNumber(p.amountofmoney), 0);
-      const totalPaymentsAFNCombined = totalPaymentsAFS + totalPaymentsUSD * exchangeRate;
-
-      // ─── Other totals ──────────────────────────────────────────────────
-      const totalReceipts = receipts.reduce((s, r) => s + parseNumber(r.amountofmoney), 0);
-      const totalOtherIncomes = otherIncomes.reduce((s, inc) => s + parseNumber(inc.amount), 0);
-      const totalStockUSD = categoryData.totalStockValue || 0;
-
-      const totalBlanketAFN = blanketStock.reduce((sum, item) => sum + parseNumber(item.totalValue), 0);
-      const totalStockAFN = totalStockUSD * exchangeRate + totalBlanketAFN;
-      const balance = totalReceipts + totalOtherIncomes + totalStockAFN + totalCalculated - totalNonCalculated - totalPaymentsAFNCombined;
-
-      const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-      doc.setR2L(false);
-      doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
-      doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
-      doc.setFont("Vazirmatn");
-
-      const today = moment().format("YYYY/MM/DD");
-      const dateRangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
-
-      doc.setFontSize(14);
-      doc.text(`گزارش جامع (${dateRangeStr})`, doc.internal.pageSize.getWidth() - 40, 40, { align: "right" });
-      doc.setFontSize(10);
-      doc.text(`تاریخ تولید: ${today}`, doc.internal.pageSize.getWidth() - 40, 60, { align: "right" });
-      doc.text(`نرخ تبدیل (۱$ = ${exchangeRate} ؋)`, doc.internal.pageSize.getWidth() - 40, 75, { align: "right" });
-
-      let startY = 95;
-
-      const addSectionTitle = (title, y) => {
-        y = ensureSpace(doc, y, 1, 20);
-        doc.setFontSize(12);
-        doc.setTextColor(40, 40, 40);
-        doc.text(title, doc.internal.pageSize.getWidth() - 40, y, { align: "right" });
-        return y + 20;
-      };
-
-      // ─── 1. Payments ──────────────────────────────────────────────────
-      startY = addSectionTitle(" گزارش پرداخت‌ها به فروشندگان", startY);
-      if (payments.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ پرداختی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const payHeaders = [["ID", "فروشنده", "مبلغ", "واحد پول", "توضیحات", "تاریخ"]];
-        const payBody = payments.map((p) => {
-          const isAfs = p.is_Afs !== undefined ? p.is_Afs : true;
-          const currency = isAfs ? "افغانی" : "دلار";
-          return [
-            p.id,
-            p.customer?.fullname || `فروشنده ${p.customerId}`,
-            p.amountofmoney,
-            currency,
-            p.description || "-",
-            moment(p.createdAt).format("YYYY/MM/DD"),
-          ];
-        });
-        autoTable(doc, {
-          startY,
-          head: payHeaders,
-          body: payBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 3);
-        doc.setFontSize(11);
-        doc.text(`جمع پرداخت‌ها به افغانی: ${totalPaymentsAFS.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 15;
-        doc.text(
-          `جمع پرداخت‌ها به دلار: $${totalPaymentsUSD.toLocaleString()} (≈ ${(totalPaymentsUSD * exchangeRate).toLocaleString()} ؋)`,
-          doc.internal.pageSize.getWidth() - 40,
-          startY,
-          { align: "right" }
-        );
-        startY += 15;
-        doc.text(`جمع کل پرداخت‌ها (به افغانی): ${totalPaymentsAFNCombined.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
-
-      // ─── 2. Receipts ──────────────────────────────────────────────────
-      startY = addSectionTitle(" گزارش رسیدهای خریداران (افغانی)", startY);
-      if (receipts.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ رسیدی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const recHeaders = [["ID", "خریدار", "مبلغ (؋)", "توضیحات", "تاریخ"]];
-        const recBody = receipts.map((r) => [
+    /* ─────────────── 2. Receipts ─────────────── */
+    startY = addSectionTitle("گزارش رسیدهای خریداران (افغانی)", startY);
+    if (receipts.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ رسیدی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["ID", "خریدار", "مبلغ دریافتی", "توضیحات", "تاریخ"]],
+        body: receipts.map((r) => [
           r.id,
           r.buyer?.fullname || `خریدار ${r.buyerId}`,
           r.amountofmoney,
           r.description || "-",
           moment(r.createdAt).format("YYYY/MM/DD"),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: recHeaders,
-          body: recBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(`جمع رسیدها: ${totalReceipts.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`جمع رسیدها: ${totalReceipts.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 3. Other Income ─────────────────────────────────────────────
-      startY = addSectionTitle(" گزارش عایدهای متفرقه (افغانی)", startY);
-      if (otherIncomes.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ عاید متفرقه‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const oiHeaders = [["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"]];
-        const oiBody = otherIncomes.map((inc, idx) => [
+    /* ─────────────── 3. Other Income ─────────────── */
+    startY = addSectionTitle("گزارش عایدهای متفرقه (افغانی)", startY);
+    if (otherIncomes.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ عاید متفرقه‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"]],
+        body: otherIncomes.map((inc, idx) => [
           idx + 1,
           inc.for,
           parseFloat(inc.amount).toLocaleString("eng-en"),
           inc.description || "-",
           moment(inc.createdAt).format("YYYY/MM/DD HH:mm"),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: oiHeaders,
-          body: oiBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(`جمع عایدهای متفرقه: ${totalOtherIncomes.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`جمع عایدهای متفرقه: ${totalOtherIncomes.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 4. Expenses – Calculated ──────────────────────────────────────
-      startY = addSectionTitle(" هزینه‌های محاسبه شده (افغانی)", startY);
-      if (calculatedExpenses.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ هزینه محاسبه شده‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const expHeaders = [["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"]];
-        const expBody = calculatedExpenses.map((e) => [
-          e.id,
-          parseNumber(e.amount).toLocaleString(),
-          e.purpose || "—",
-          e.by || "نامشخص",
+    /* ─────────────── 4. Fixed Asset Expenses ─────────────── */
+    startY = addSectionTitle("هزینه‌های دارایی ثابت (افغانی)", startY);
+    if (calculatedExpenses.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ هزینه دارایی ثابت یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"]],
+        body: calculatedExpenses.map((e) => [
+          e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—", e.by || "نامشخص",
           moment(e.createdAt).format("YYYY/MM/DD"),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: expHeaders,
-          body: expBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [40, 160, 90], textColor: 255, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(`جمع هزینه‌های محاسبه شده: ${totalCalculated.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [40, 160, 90], textColor: 255, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`جمع هزینه‌های دارایی ثابت: ${totalCalculated.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 5. Expenses – Non-Calculated ──────────────────────────────────
-      startY = addSectionTitle(" هزینه‌های محاسبه نشده (افغانی)", startY);
-      if (nonCalculatedExpenses.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ هزینه محاسبه نشده‌ای یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const expHeaders = [["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"]];
-        const expBody = nonCalculatedExpenses.map((e) => [
-          e.id,
-          parseNumber(e.amount).toLocaleString(),
-          e.purpose || "—",
-          e.by || "نامشخص",
+    /* ─────────────── 5. Consumption Expenses ─────────────── */
+    startY = addSectionTitle("هزینه‌های مصرف (افغانی)", startY);
+    if (nonCalculatedExpenses.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ هزینه مصرفی یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"]],
+        body: nonCalculatedExpenses.map((e) => [
+          e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—", e.by || "نامشخص",
           moment(e.createdAt).format("YYYY/MM/DD"),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: expHeaders,
-          body: expBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [200, 160, 40], textColor: 255, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(`جمع هزینه‌های محاسبه نشده: ${totalNonCalculated.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [200, 160, 40], textColor: 255, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`جمع هزینه‌های مصرف: ${totalNonCalculated.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 6. Salaries ──────────────────────────────────────────────────
-      startY = addSectionTitle(" گزارش حقوق و حاضری کارمندان", startY);
-      if (salaries.length === 0) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ رکورد حاضری یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const salHeaders = [["تاریخ پرداخت", "مبلغ پرداختی", "مبلغ قابل پرداخت", "کارمند"]];
-        const salBody = salaries.map((s) => [
+    /* ─────────────── 6. Salaries ─────────────── */
+    startY = addSectionTitle("گزارش حقوق و حاضری کارمندان", startY);
+    if (salaries.length === 0) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ رکورد حاضری یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["تاریخ پرداخت", "مبلغ پرداختی", "مبلغ قابل پرداخت", "کارمند"]],
+        body: salaries.map((s) => [
           moment(s.createdAt).format("YYYY/MM/DD"),
           parseNumber(s.receipt).toLocaleString(),
           parseNumber(s.total).toLocaleString(),
           s.Staff?.name || "نامشخص",
-        ]);
-        autoTable(doc, {
-          startY,
-          head: salHeaders,
-          body: salBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        const totalPaid = salaries.reduce((s, sal) => s + parseNumber(sal.receipt), 0);
-        const totalToPay = salaries.reduce((s, sal) => s + parseNumber(sal.total), 0);
-        startY = ensureSpace(doc, startY, 2);
-        doc.text(`جمع پرداختی حقوق: ${totalPaid.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 15;
-        doc.text(`جمع قابل پرداخت: ${totalToPay.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      const totalPaid = salaries.reduce((s, sal) => s + parseNumber(sal.receipt), 0);
+      const totalToPay = salaries.reduce((s, sal) => s + parseNumber(sal.total), 0);
+      startY = ensureSpace(doc, startY, 2);
+      doc.text(`جمع پرداختی حقوق: ${totalPaid.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" }); startY += 15;
+      doc.text(`جمع قابل پرداخت: ${totalToPay.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" }); startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 7. Inventory (Carpet) ──────────────────────────────────────
-      startY = addSectionTitle(" گزارش موجودی کالاها (دلار)", startY);
-      const { categories } = categoryData;
-      if (!categories.length) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ دسته‌بندی با کالای موجود یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const catHeaders = [["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)"]];
-        const catBody = categories.map((cat) => [
+    /* ─────────────── 7. Carpet Inventory ─────────────── */
+    startY = addSectionTitle("گزارش موجودی کالاها (دلار)", startY);
+    const { categories } = categoryData;
+    if (!categories.length) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ دسته‌بندی با کالای موجود یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)"]],
+        body: categories.map((cat) => [
           cat.name,
           cat.type?.name || "بدون نوع",
           cat.summary?.totalExistingIncomes || 0,
           (cat.summary?.totalStockValue || 0).toLocaleString(),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: catHeaders,
-          body: catBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(
-          `ارزش کل موجودی کالاها: $${totalStockUSD.toLocaleString()} (≈ ${(totalStockUSD * exchangeRate).toLocaleString()} ؋)`,
-          doc.internal.pageSize.getWidth() - 40,
-          startY,
-          { align: "right" }
-        );
-        startY += 20;
-      }
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`ارزش کل موجودی کالاها: $${totalStockUSD.toLocaleString()} (≈ ${(totalStockUSD * exchangeRate).toLocaleString()} ؋)`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    }
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
 
-      // ─── 8. Blanket Stock ─────────────────────────────────────────────
-      startY = addSectionTitle(" گزارش موجودی کمپل (بلنکت) (افغانی)", startY);
-      if (!blanketStock.length) {
-        startY = ensureSpace(doc, startY, 1);
-        doc.text("هیچ موجودی کمپل یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      } else {
-        const bHeaders = [["دسته", "تعداد", "قیمت واحد (؋)", "ارزش کل (؋)"]];
-        const bBody = blanketStock.map((item) => [
+    /* ─────────────── 8. Blanket Stock ─────────────── */
+    startY = addSectionTitle("گزارش موجودی کمپل (بلنکت) (افغانی)", startY);
+    if (!blanketStock.length) {
+      startY = ensureSpace(doc, startY, 1);
+      doc.text("هیچ موجودی کمپل یافت نشد.", doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
+    } else {
+      autoTable(doc, {
+        startY,
+        head: [["دسته", "تعداد", "قیمت واحد (؋)", "ارزش کل (؋)"]],
+        body: blanketStock.map((item) => [
           item.category?.name || `دسته ${item.categoryId}`,
           item.quantity,
           item.unitPrice,
           parseNumber(item.totalValue).toLocaleString(),
-        ]);
-        autoTable(doc, {
-          startY,
-          head: bHeaders,
-          body: bBody,
-          theme: "grid",
-          styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
-          headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
-          margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
-        });
-        startY = doc.lastAutoTable.finalY + 15;
-        startY = ensureSpace(doc, startY, 1);
-        doc.text(`ارزش کل موجودی کمپل: ${totalBlanketAFN.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 20;
-      }
-
-      // ─── 9. Summary ──────────────────────────────────────────────────
-      startY = addSectionTitle(" خلاصه و محاسبه بیلانس به افغانی", startY);
-      const summaryLines = [
-        `رسیدهای خریداران: ${totalReceipts.toLocaleString()} ؋`,
-        `عایدهای متفرقه: ${totalOtherIncomes.toLocaleString()} ؋`,
-        `ارزش موجودی کالاها به افغانی: ${(totalStockUSD * exchangeRate).toLocaleString()} ؋`,
-        `ارزش موجودی کمپل: ${totalBlanketAFN.toLocaleString()} ؋`,
-        `هزینه‌های محاسبه شده (مثبت): ${totalCalculated.toLocaleString()} ؋`,
-        `هزینه‌های محاسبه نشده (منفی): ${totalNonCalculated.toLocaleString()} ؋`,
-        `خالص هزینه‌ها (محاسبه شده - محاسبه نشده): ${(totalCalculated - totalNonCalculated).toLocaleString()} ؋`,
-        `پرداخت‌ها به افغانی: ${totalPaymentsAFS.toLocaleString()} ؋`,
-        `پرداخت‌ها به دلار (تبدیل): ${(totalPaymentsUSD * exchangeRate).toLocaleString()} ؋`,
-        `جمع کل پرداخت‌ها: ${totalPaymentsAFNCombined.toLocaleString()} ؋`,
-        `مانده (تعادل): ${balance.toLocaleString()} ؋`,
-      ];
-      doc.setFontSize(11);
-      doc.setTextColor(40, 40, 40);
-      for (let i = 0; i < summaryLines.length; i++) {
-        startY = ensureSpace(doc, startY, 1);
-        if (i === summaryLines.length - 1) {
-          doc.setFontSize(13);
-          doc.setTextColor(0, 100, 0);
-        } else {
-          doc.setFontSize(11);
-          doc.setTextColor(40, 40, 40);
-        }
-        doc.text(summaryLines[i], doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
-        startY += 15;
-      }
-      doc.setTextColor(40, 40, 40);
-
-      // Page numbers
-      const pageCount = doc.internal.getNumberOfPages();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setFontSize(9);
-        doc.text(`${i}/${pageCount}`, pageWidth - 40, pageHeight - 30, { align: "right" });
-      }
-
-      doc.save(`combined_report_${moment().format("YYYY-MM-DD")}.pdf`);
-    } catch (err) {
-      console.error(err);
-      alert("خطا در ایجاد گزارش جامع");
-    } finally {
-      setLoading(false);
+        ]),
+        theme: "grid",
+        styles: { font: "Vazirmatn", fontSize: 9, halign: "center", valign: "middle" },
+        headStyles: { fillColor: [220, 220, 220], textColor: 20, fontStyle: "normal" },
+        margin: { left: PAGE_MARGIN_LEFT_RIGHT, right: PAGE_MARGIN_LEFT_RIGHT, bottom: PAGE_MARGIN_BOTTOM },
+      });
+      startY = doc.lastAutoTable.finalY + 15;
+      startY = ensureSpace(doc, startY, 1);
+      doc.text(`ارزش کل موجودی کمپل: ${totalBlanketAFN.toLocaleString()} ؋`, doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 20;
     }
-  };
+    startY = drawDivider(doc, startY);
+    startY = startNewPage(doc);   // 🔹 page break
+
+    /* ─────────────── 9. Summary (LAST — no break after) ─────────────── */
+    startY = addSectionTitle("خلاصه و محاسبه بیلانس به افغانی", startY);
+    const summaryLines = [
+      `رسیدهای خریداران: ${totalReceipts.toLocaleString()} ؋`,
+      `عایدهای متفرقه: ${totalOtherIncomes.toLocaleString()} ؋`,
+      `ارزش موجودی کالاها به افغانی: ${(totalStockUSD * exchangeRate).toLocaleString()} ؋`,
+      `ارزش موجودی کمپل: ${totalBlanketAFN.toLocaleString()} ؋`,
+      `هزینه‌های دارایی ثابت (مثبت): ${totalCalculated.toLocaleString()} ؋`,
+      `هزینه‌های مصرف (منفی): ${totalNonCalculated.toLocaleString()} ؋`,
+      `خالص هزینه‌ها (دارایی ثابت - مصرف): ${(totalCalculated - totalNonCalculated).toLocaleString()} ؋`,
+      `پرداخت‌ها به افغانی: ${totalPaymentsAFS.toLocaleString()} ؋`,
+      `پرداخت‌ها به دلار (تبدیل): ${(totalPaymentsUSD * exchangeRate).toLocaleString()} ؋`,
+      `جمع کل پرداخت‌ها: ${totalPaymentsAFNCombined.toLocaleString()} ؋`,
+      `مانده (تعادل): ${balance.toLocaleString()} ؋`,
+    ];
+    doc.setFontSize(11);
+    doc.setTextColor(40, 40, 40);
+    for (let i = 0; i < summaryLines.length; i++) {
+      startY = ensureSpace(doc, startY, 1);
+      if (i === summaryLines.length - 1) {
+        doc.setFontSize(13);
+        doc.setTextColor(0, 100, 0);
+      } else {
+        doc.setFontSize(11);
+        doc.setTextColor(40, 40, 40);
+      }
+      doc.text(summaryLines[i], doc.internal.pageSize.getWidth() - 40, startY, { align: "right" });
+      startY += 15;
+    }
+    doc.setTextColor(40, 40, 40);
+
+    // Page numbers
+    const pageCount = doc.internal.getNumberOfPages();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.text(`${i}/${pageCount}`, pageWidth - 40, pageHeight - 30, { align: "right" });
+    }
+
+    doc.save(`combined_report_${moment().format("YYYY-MM-DD")}.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert("خطا در ایجاد گزارش جامع");
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ─── EXCEL ──────────────────────────────────────────────────────────────
   const handleExcelDownload = async () => {
@@ -589,7 +577,7 @@ const CombinedReportsDownload = () => {
         [["جمع کل", "", totalOtherIncomes, "", ""]]
       );
 
-      // ─── 4. Expenses – Calculated ────────────────────────────────────
+      // ─── 4. Expenses – Fixed Asset (دارایی ثابت) ─────────────────────
       const calcRows = calculatedExpenses.map((e) => [
         e.id,
         e.amount,
@@ -598,13 +586,13 @@ const CombinedReportsDownload = () => {
         moment(e.createdAt).format("YYYY/MM/DD HH:mm"),
       ]);
       addSheet(
-        "هزینه‌های محاسبه شده",
+        "هزینه‌های دارایی ثابت",
         ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
         calcRows,
         [["جمع کل", totalCalculated, "", "", ""]]
       );
 
-      // ─── 5. Expenses – Non‑Calculated ──────────────────────────────
+      // ─── 5. Expenses – Consumption (مصرف) ─────────────────────────────
       const nonCalcRows = nonCalculatedExpenses.map((e) => [
         e.id,
         e.amount,
@@ -613,7 +601,7 @@ const CombinedReportsDownload = () => {
         moment(e.createdAt).format("YYYY/MM/DD HH:mm"),
       ]);
       addSheet(
-        "هزینه‌های محاسبه نشده",
+        "هزینه‌های مصرف",
         ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
         nonCalcRows,
         [["جمع کل", totalNonCalculated, "", "", ""]]
@@ -682,8 +670,8 @@ const CombinedReportsDownload = () => {
         ["عایدهای متفرقه", "؋", totalOtherIncomes, totalOtherIncomes],
         ["ارزش موجودی کالاها", "$", totalStockUSD, (totalStockUSD * exchangeRate).toLocaleString()],
         ["ارزش موجودی کمپل", "؋", totalBlanketAFN, totalBlanketAFN],
-        ["هزینه‌های محاسبه شده", "؋", totalCalculated, totalCalculated],
-        ["هزینه‌های محاسبه نشده", "؋", totalNonCalculated, totalNonCalculated],
+        ["هزینه‌های دارایی ثابت", "؋", totalCalculated, totalCalculated],
+        ["هزینه‌های مصرف", "؋", totalNonCalculated, totalNonCalculated],
         ["جمع کل هزینه‌ها", "؋", totalExpensesAll, totalExpensesAll],
         ["پرداخت‌ها به افغانی", "؋", totalPaymentsAFS, totalPaymentsAFS],
         ["پرداخت‌ها به دلار (تبدیل)", "$", totalPaymentsUSD, (totalPaymentsUSD * exchangeRate).toLocaleString()],

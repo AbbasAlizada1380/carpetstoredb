@@ -19,7 +19,7 @@ const ExpenseManager = () => {
     by: "",
     amount: "",
     description: "",
-    isCalculated: false, // 👈 NEW
+    isCalculated: false, // true = دارایی ثابت, false = مصرف
   });
 
   /* ======================
@@ -204,18 +204,62 @@ const ExpenseManager = () => {
               </div>
             </div>
 
-            {/* ─── NEW: isCalculated Checkbox ────────────────────────── */}
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="isCalculated"
-                checked={form.isCalculated}
-                onChange={(e) => setForm({ ...form, isCalculated: e.target.checked })}
-                className="w-5 h-5 text-cyan-600 border-gray-300 rounded focus:ring-cyan-500"
-              />
-              <label htmlFor="isCalculated" className="text-sm font-medium text-gray-700">
-                محاسبه شونده 
+            {/* ─── REPLACED: Radio group — دارایی ثابت / مصرف ────────── */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                نوع هزینه
               </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Option 1: دارایی ثابت (isCalculated = true) */}
+                <label
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${
+                    form.isCalculated
+                      ? "border-cyan-600 bg-cyan-50"
+                      : "border-gray-200 hover:border-cyan-300 bg-white"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="expenseType"
+                    value="fixed"
+                    checked={form.isCalculated === true}
+                    onChange={() =>
+                      setForm({ ...form, isCalculated: true })
+                    }
+                    className="w-4 h-4 text-cyan-600 focus:ring-cyan-500"
+                  />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-semibold text-gray-800">
+                      دارایی ثابت
+                    </span>    
+                  </div>
+                </label>
+
+                {/* Option 2: مصرف (isCalculated = false) */}
+                <label
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${
+                    !form.isCalculated
+                      ? "border-cyan-600 bg-cyan-50"
+                      : "border-gray-200 hover:border-cyan-300 bg-white"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="expenseType"
+                    value="consumption"
+                    checked={form.isCalculated === false}
+                    onChange={() =>
+                      setForm({ ...form, isCalculated: false })
+                    }
+                    className="w-4 h-4 text-cyan-600 focus:ring-cyan-500"
+                  />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-semibold text-gray-800">
+                      مصرف
+                    </span>
+                  </div>
+                </label>
+              </div>
             </div>
 
             {/* Description Field */}

@@ -153,11 +153,11 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
     // Validate receipt
     if (receiptValue < 0) {
-      setError("مبلغ دریافتی نمی‌تواند منفی باشد");
+      setError("مبلغ پرداختی نمی‌تواند منفی باشد");
       return;
     }
     if (receiptValue > totalAmount + 0.01) {
-      setError("مبلغ دریافتی نمی‌تواند بیشتر از کل فاکتور باشد");
+      setError("مبلغ پرداختی نمی‌تواند بیشتر از کل فاکتور باشد");
       return;
     }
 
@@ -373,7 +373,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
               <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)}دالر</div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ پرداختی (کل)</label>
               <input
                 type="number"
                 step="any"
@@ -388,9 +388,6 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
               <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)}دالر</div>
             </div>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            * مبلغ دریافتی به ترتیب (ردیف به ردیف) به اقلام فاکتور اختصاص می‌یابد تا تسویه شود.
-          </p>
         </div>
 
 

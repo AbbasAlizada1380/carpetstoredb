@@ -14,6 +14,13 @@ const ExpenseTable = ({
 }) => {
   const { currentUser } = useSelector((state) => state.user);
 
+  /* ---------------------------------------------------------
+     Helper: read isCalculated from either field name
+     (backend uses isCalculated; older rows may use calculated)
+  --------------------------------------------------------- */
+  const getIsCalculated = (expense) =>
+    Boolean(expense.isCalculated ?? expense.calculated);
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
       {/* Table Header */}
@@ -42,7 +49,7 @@ const ExpenseTable = ({
               <th className="p-3 border-b font-semibold">هدف هزینه</th>
               <th className="p-3 border-b font-semibold">پرداخت کننده</th>
               <th className="p-3 border-b font-semibold">مبلغ (افغانی)</th>
-              <th className="p-3 border-b font-semibold">محاسبه شده</th>
+              <th className="p-3 border-b font-semibold">نوع هزینه</th>
               <th className="p-3 border-b font-semibold">توضیحات</th>
               <th className="p-3 border-b font-semibold">تاریخ ثبت</th>
               <th className="p-3 border-b font-semibold">عملیات</th>
@@ -59,83 +66,91 @@ const ExpenseTable = ({
                 </td>
               </tr>
             ) : expenses.length ? (
-              expenses.map((e, index) => (
-                <tr
-                  key={e.id}
-                  className="hover:bg-gray-50 border-b last:border-0 transition-colors"
-                >
-                  <td className="p-3 text-gray-600">{e.id}</td>
-                  <td className="p-3 font-medium text-gray-800">
-                    <div className="max-w-xs mx-auto truncate">{e.purpose}</div>
-                  </td>
-                  <td className="p-3">
-                    <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-sm">
-                      {e.by}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    <div className="flex flex-col items-center">
-                      <span className="text-purple-700 font-bold text-lg">
-                        {parseFloat(e.amount || 0)}
+              expenses.map((e) => {
+                const isCalculated = getIsCalculated(e);
+                return (
+                  <tr
+                    key={e.id}
+                    className="hover:bg-gray-50 border-b last:border-0 transition-colors"
+                  >
+                    <td className="p-3 text-gray-600">{e.id}</td>
+                    <td className="p-3 font-medium text-gray-800">
+                      <div className="max-w-xs mx-auto truncate">{e.purpose}</div>
+                    </td>
+                    <td className="p-3">
+                      <span className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-sm">
+                        {e.by}
                       </span>
-                      <span className="text-xs text-gray-500">افغانی</span>
-                    </div>
-                  </td>
-                  <td className="p-3">
-                    {e.calculated ? (
-                      <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium">
-                        بله
-                      </span>
-                    ) : (
-                      <span className="bg-gray-100 text-gray-500 px-3 py-1 rounded-full text-sm font-medium">
-                        خیر
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    <div className="max-w-xs mx-auto">
-                      {e.description ? (
-                        <div className="text-gray-600 text-sm truncate" title={e.description}>
-                          {e.description}
+                    </td>
+                    <td className="p-3">
+                      <div className="flex flex-col items-center">
+                        <span className="text-purple-700 font-bold text-lg">
+                          {parseFloat(e.amount || 0).toLocaleString("en-US")}
+                        </span>
+                        <span className="text-xs text-gray-500">افغانی</span>
+                      </div>
+                    </td>
+
+                    {/* ─── REPLACED: نوع هزینه (دارایی ثابت / مصرف) ─── */}
+                    <td className="p-3">
+                      {isCalculated ? (
+                        <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
+                          <span className="w-2 h-2 rounded-full bg-blue-600" />
+                          دارایی ثابت
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-sm font-medium">
+                          <span className="w-2 h-2 rounded-full bg-gray-500" />
+                          مصرف
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="p-3">
+                      <div className="max-w-xs mx-auto">
+                        {e.description ? (
+                          <div className="text-gray-600 text-sm truncate" title={e.description}>
+                            {e.description}
+                          </div>
+                        ) : (
+                          <span className="text-gray-400 text-sm">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {e.createdAt ? (
+                        new Date(e.createdAt)
+                          .toLocaleDateString("eng-en")
+                          .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {currentUser.role === "admin" ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => onEdit(e)}
+                            className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
+                            title="ویرایش"
+                          >
+                            <FaEdit />
+                          </button>
+                          <button
+                            onClick={() => onDelete(e.id)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                            title="حذف"
+                          >
+                            <FaTrash />
+                          </button>
                         </div>
                       ) : (
-                        <span className="text-gray-400 text-sm">—</span>
+                        "—"
                       )}
-                    </div>
-                  </td>
-                  <td className="p-3">
-                    {e.createdAt ? (
-                      new Date(e.createdAt)
-                        .toLocaleDateString("eng-en")
-                        .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="p-3">
-                    {currentUser.role === "admin" ? (
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => onEdit(e)}
-                          className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
-                          title="ویرایش"
-                        >
-                          <FaEdit />
-                        </button>
-                        <button
-                          onClick={() => onDelete(e.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
-                          title="حذف"
-                        >
-                          <FaTrash />
-                        </button>
-                      </div>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
-              ))
+                    </td>
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td colSpan="8" className="p-8">
