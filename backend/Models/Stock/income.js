@@ -34,7 +34,12 @@ const Income = sequelize.define(
     area: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: true,
-      comment: "Total area (width × length, pre-computed if needed)",
+      comment: "Current remaining area (width × current length, pre-computed)",
+    },
+    initialArea: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment: "Original area when the carpet was first received (width × initialLength)",
     },
 
     unit_price: {
@@ -48,7 +53,12 @@ const Income = sequelize.define(
     length: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      comment: "Length of the carpet",
+      comment: "Current remaining length of the carpet",
+    },
+    initialLength: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment: "Original length when the carpet was first received",
     },
     Sells: {
       type: DataTypes.JSON,
@@ -61,6 +71,5 @@ const Income = sequelize.define(
     timestamps: true,
   }
 );
-
 
 export default Income;
