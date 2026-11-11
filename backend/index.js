@@ -24,7 +24,7 @@ import otherIncomeRouter from "./routes/Finance/otherIncomeRouter.js";
 import bIncomeRoute from "./routes/Stock/bincomeRoute.js";
 import bExistRoute from "./routes/Stock/bExistRoute.js";
 import bsalesRouter from "./routes/Stock/BSalesRoute.js";
-import { runBackfillInitialDimensions } from "./Controllers/stock/IncomeController.js";
+import { runBackfillBincomeInitialAmount } from "./Controllers/stock/bIncomeController.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -100,7 +100,7 @@ sequelize
     app.listen(port, () => {
       console.log(`✅ Server is running on port ${port}`);
     });
-    runBackfillInitialDimensions();
+    runBackfillBincomeInitialAmount();
   })
   .catch((error) => {
     console.error("❌ Unable to connect to the database:", error);

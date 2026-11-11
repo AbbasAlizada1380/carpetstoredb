@@ -10,25 +10,31 @@ const Bincome = sequelize.define(
       comment: "Foreign key referencing the category table",
     },
     amount: {
-      type: DataTypes.DECIMAL(10, 2), // Changed to DECIMAL for monetary precision
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      comment: "Total monetary amount for this blanket income entry",
+      comment: "Quantity of carpet (e.g., number of pieces/rolls)",
+    },
+    initialAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      comment: "Initial carpet quantity before any adjustments",
     },
     weight: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: true,
-      comment: "Weight of the blanket (e.g., in kilograms)",
+      comment: "Weight of the carpet (e.g., in kilograms)",
     },
     unitPrice: {
-      type: DataTypes.DECIMAL(10, 2), // Fixed: DECIMAL, not INTEGER
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      comment: "Price per unit weight or per item",
+      comment: "Price per carpet unit",
     },
     totalPrice: {
-      type: DataTypes.DECIMAL(10, 2), // Fixed: DECIMAL
-      allowNull: false, // Now it will be set by hooks, so no nulls
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
       defaultValue: 0,
-      comment: "Computed total price (amount × unitPrice)",
+      comment: "Computed total price (carpet quantity × unitPrice)",
     },
     customerId: {
       type: DataTypes.INTEGER,
@@ -52,18 +58,21 @@ const Bincome = sequelize.define(
       },
     ],
     hooks: {
-      // Automatically compute totalPrice before creating
       beforeCreate: (bincome) => {
         const amount = parseFloat(bincome.amount) || 0;
         const unitPrice = parseFloat(bincome.unitPrice) || 0;
-        bincome.totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+        bincome.totalPrice = Math.round(amount * unitPrice * 100) / 100;
+
+        // Default initialAmount to the starting carpet quantity
+        if (bincome.initialAmount === undefined || bincome.initialAmount === null) {
+          bincome.initialAmount = amount;
+        }
       },
-      // Recompute on update if amount or unitPrice change
       beforeUpdate: (bincome) => {
-        if (bincome.changed('amount') || bincome.changed('unitPrice')) {
+        if (bincome.changed("amount") || bincome.changed("unitPrice")) {
           const amount = parseFloat(bincome.amount) || 0;
           const unitPrice = parseFloat(bincome.unitPrice) || 0;
-          bincome.totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+          bincome.totalPrice = Math.round(amount * unitPrice * 100) / 100;
         }
       },
     },

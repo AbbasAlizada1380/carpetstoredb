@@ -3,6 +3,8 @@ import { IncomeBill, Pay, CustomerAccount, Customer, Category } from "../../Mode
 import Bincome from "../../Models/Stock/bincome.js";
 import bExist from "../../Models/Stock/bExist.js";
 import sequelize from "../../dbconnection.js";
+import { Op } from "sequelize";
+
 
 // ─── HELPER: Update CustomerAccount with bill ID ──────────────────────────
 const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) => {
@@ -200,25 +202,37 @@ export const createBincome = async (req, res) => {
         if (isNaN(weightNum) || weightNum <= 0) {
           throw new Error(`Entry ${i + 1}: Weight must be a positive number if provided`);
         }
-      } if (!unitPrice || parseFloat(unitPrice) <= 0) throw new Error(`Entry ${i + 1}: Unit price must be a positive number`);
+      }
+      if (!unitPrice || parseFloat(unitPrice) <= 0) throw new Error(`Entry ${i + 1}: Unit price must be a positive number`);
 
       const categoryExists = await Category.findByPk(categoryId, { transaction });
       if (!categoryExists) throw new Error(`Entry ${i + 1}: Invalid Category ID ${categoryId}`);
 
+      const parsedAmount = parseFloat(amount);
+      const parsedUnitPrice = parseFloat(unitPrice);
+      const parsedWeight =
+        weight !== undefined && weight !== null && weight !== ""
+          ? parseFloat(weight)
+          : null;
+
+      const totalPrice = parsedAmount * parsedUnitPrice;
+      const initialAmount = computeInitialAmount(totalPrice, parsedUnitPrice);
+
       const newBincome = await Bincome.create({
         categoryId,
-        amount: parseFloat(amount),
-        weight: parseFloat(weight),
-        unitPrice: parseFloat(unitPrice),
+        amount: parsedAmount,
+        initialAmount,
+        weight: parsedWeight,
+        unitPrice: parsedUnitPrice,
         customerId: finalCustomerId,
         paidAmount: 0,
-        remaind: parseFloat(amount) * parseFloat(unitPrice),
+        remaind: totalPrice,
       }, { transaction });
 
       createdBincomes.push(newBincome);
 
       // Update stock
-      await updateBExistStock(categoryId, amount, unitPrice, transaction);
+      await updateBExistStock(categoryId, parsedAmount, parsedUnitPrice, transaction);
     }
 
     await transaction.commit();
@@ -326,11 +340,16 @@ export const getAllBincome = async (req, res) => {
       offset,
     });
 
-    // Attach totalPrice (if needed for response)
+    // Attach totalPrice and (recomputed) initialAmount for response
     const dataWithTotal = rows.map((item) => {
       const amount = parseFloat(item.amount) || 0;
       const unitPrice = parseFloat(item.unitPrice) || 0;
-      item.dataValues.totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+      const totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+      item.dataValues.totalPrice = totalPrice;
+      // If stored initialAmount is missing, derive it; otherwise keep the stored value
+      if (item.initialAmount === undefined || item.initialAmount === null) {
+        item.dataValues.initialAmount = computeInitialAmount(totalPrice, unitPrice);
+      }
       return item.dataValues;
     });
 
@@ -363,7 +382,11 @@ export const getBincomeById = async (req, res) => {
 
     const amount = parseFloat(bincome.amount) || 0;
     const unitPrice = parseFloat(bincome.unitPrice) || 0;
-    bincome.dataValues.totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+    const totalPrice = Math.round((amount * unitPrice) * 100) / 100;
+    bincome.dataValues.totalPrice = totalPrice;
+    if (bincome.initialAmount === undefined || bincome.initialAmount === null) {
+      bincome.dataValues.initialAmount = computeInitialAmount(totalPrice, unitPrice);
+    }
 
     res.status(200).json({ success: true, data: bincome.dataValues });
   } catch (error) {
@@ -387,9 +410,10 @@ export const updateBincome = async (req, res) => {
     if (weight !== undefined) bincome.weight = parseFloat(weight);
     if (unitPrice !== undefined) bincome.unitPrice = parseFloat(unitPrice);
 
-    // Recalculate remaind (total)
+    // Recalculate remaind and initialAmount
     if (amount !== undefined || unitPrice !== undefined) {
       bincome.remaind = bincome.amount * bincome.unitPrice;
+      bincome.initialAmount = computeInitialAmount(bincome.remaind, bincome.unitPrice);
     }
 
     await bincome.save();
@@ -428,5 +452,73 @@ export const deleteBincome = async (req, res) => {
     res.status(200).json({ message: "Bincome record deleted successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+// ─── HELPER: Compute initialAmount from totalPrice / unitPrice ────────────
+const computeInitialAmount = (totalPrice, unitPrice) => {
+  const tp = parseFloat(totalPrice) || 0;
+  const up = parseFloat(unitPrice) || 0;
+  if (up <= 0) return null; // can't derive
+  return Math.round((tp / up) * 100) / 100;
+};
+
+export const runBackfillBincomeInitialAmount = async () => {
+  let t;
+  try {
+    t = await sequelize.transaction();
+
+    // ✅ Match rows where initialAmount is NULL or <= 0
+    const rows = await Bincome.findAll({
+      where: {
+        [Op.or]: [
+          { initialAmount: { [Op.is]: null } },
+          { initialAmount: { [Op.lte]: 0 } },
+        ],
+      },
+      attributes: [
+        "id",
+        "amount",
+        "unitPrice",
+        "initialAmount",
+      ],
+      transaction: t,
+    });
+
+    let updated = 0;
+    let skipped = 0;
+    const skippedDetails = [];
+
+    for (const row of rows) {
+      const amount = parseFloat(row.amount) || 0;
+      const unitPrice = parseFloat(row.unitPrice) || 0;
+      const totalPrice = amount * unitPrice;
+
+      const initialAmount = computeInitialAmount(totalPrice, unitPrice);
+
+      if (initialAmount === null) {
+        skipped++;
+        skippedDetails.push({
+          id: row.id,
+          reason: "Invalid amount / unitPrice (unitPrice <= 0)",
+          amount: row.amount,
+          unitPrice: row.unitPrice,
+        });
+        continue;
+      }
+
+      await row.update({ initialAmount }, { transaction: t });
+      updated++;
+    }
+
+    await t.commit();
+    t = null;
+
+    return { totalChecked: rows.length, updated, skipped, skippedDetails };
+  } catch (err) {
+    if (t && !t.finished) {
+      await t.rollback().catch(() => {});
+    }
+    throw err;
   }
 };
