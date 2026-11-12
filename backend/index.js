@@ -100,7 +100,6 @@ sequelize
     app.listen(port, () => {
       console.log(`✅ Server is running on port ${port}`);
     });
-    runBackfillBincomeInitialAmount();
   })
   .catch((error) => {
     console.error("❌ Unable to connect to the database:", error);

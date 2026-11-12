@@ -3,17 +3,14 @@ import { IncomeBill, Pay, CustomerAccount, Customer } from "../../Models/index.j
 import { Income, Type, Category } from "../../Models/index.js";
 import sequelize from "../../dbconnection.js";
 import { Op } from "sequelize";
+
 const calculateLength = (area, width) => {
   if (!area || !width || width === 0) return null;
   return area / width;
 };
 
 /* =========================================================
-   HELPER
-   Compute initialArea & initialLength from amount, unit_price,
-   and width:
-       initialArea   = amount / unit_price
-       initialLength = initialArea / width
+   HELPER: compute initialArea & initialLength
    ========================================================= */
 const calculateInitialDimensions = (amount, unit_price, width) => {
   const a = parseFloat(amount);
@@ -34,28 +31,43 @@ const calculateInitialDimensions = (amount, unit_price, width) => {
 };
 
 /* =========================================================
-   ONE-TIME BACKFILL
-   Populates initialArea and initialLength for ALL existing
-   income rows that don't have them yet.
-
-   Safe to run more than once — it only touches rows where
-   either field is NULL.
-
-   Call this once (e.g. from a temporary route) after adding
-   the two new columns to the database.
+   ✅ NEW: Normalize + validate currency fields (isAfn, DV)
    ========================================================= */
-// Controllers/stock/IncomeController.js
+const resolveCurrencyFields = (source, fallback = {}) => {
+  // isAfn — accept booleans, "true"/"false", 1/0
+  let isAfn;
+  if (source?.isAfn !== undefined) {
+    const v = source.isAfn;
+    if (typeof v === "boolean") isAfn = v;
+    else if (v === 1 || v === "1" || v === "true") isAfn = true;
+    else if (v === 0 || v === "0" || v === "false") isAfn = false;
+    else throw new Error(`Invalid isAfn value: ${v}`);
+  } else {
+    isAfn = fallback.isAfn ?? false;
+  }
+
+  // DV — must be a positive number
+  let DV;
+  if (source?.DV !== undefined && source.DV !== null && source.DV !== "") {
+    DV = parseFloat(source.DV);
+    if (!Number.isFinite(DV) || DV <= 0) {
+      throw new Error(`Invalid DV value: ${source.DV} (must be a positive number)`);
+    }
+  } else {
+    DV = fallback.DV ?? 65;
+  }
+
+  return { isAfn, DV };
+};
 
 /* =========================================================
-   CORE BACKFILL LOGIC
-   Can be called from HTTP (Express) OR programmatically.
+   ONE-TIME BACKFILL (unchanged)
    ========================================================= */
 export const runBackfillInitialDimensions = async () => {
   let t;
   try {
     t = await sequelize.transaction();
 
-    // ✅ Match rows where either field is NULL or 0 (or <= 0)
     const rows = await Income.findAll({
       where: {
         [Op.or]: [
@@ -109,15 +121,12 @@ export const runBackfillInitialDimensions = async () => {
     return { totalChecked: rows.length, updated, skipped, skippedDetails };
   } catch (err) {
     if (t && !t.finished) {
-      await t.rollback().catch(() => {});
+      await t.rollback().catch(() => { });
     }
     throw err;
   }
 };
 
-/* =========================================================
-   HTTP WRAPPER
-   ========================================================= */
 export const backfillInitialDimensions = async (req, res) => {
   try {
     const result = await runBackfillInitialDimensions();
@@ -255,6 +264,13 @@ export const createIncome = async (req, res) => {
       return res.status(400).json({ message: "Incomes array is required and must not be empty" });
     }
 
+    // ✅ NEW: resolve currency defaults from the top-level request body.
+    // These act as the default for every income item; each item may override.
+    const bodyCurrencyDefaults = resolveCurrencyFields(req.body, {
+      isAfn: false,
+      DV: 65,
+    });
+
     transaction = await sequelize.transaction();
 
     // ----- Customer handling -----
@@ -294,6 +310,14 @@ export const createIncome = async (req, res) => {
       if (!lotNumber?.trim()) throw new Error(`Income ${i + 1}: Lot number is required`);
       if (!unit_price || parseFloat(unit_price) <= 0) throw new Error(`Income ${i + 1}: Unit price must be a positive number`);
 
+      // ✅ NEW: resolve currency per income item (falls back to body-level defaults)
+      let incomeCurrency;
+      try {
+        incomeCurrency = resolveCurrencyFields(inc, bodyCurrencyDefaults);
+      } catch (e) {
+        throw new Error(`Income ${i + 1}: ${e.message}`);
+      }
+
       if (lotNumbersSet.has(lotNumber.trim())) {
         throw new Error(`Income ${i + 1}: Duplicate lot number "${lotNumber}" within the same request`);
       }
@@ -315,7 +339,6 @@ export const createIncome = async (req, res) => {
         throw new Error(`Income ${i + 1}: Amount mismatch – expected ${calculatedAmount}, received ${amount}`);
       }
 
-      // ✅ Compute initial dimensions for THIS new record
       const { initialArea, initialLength } = calculateInitialDimensions(
         amount,
         unit_price,
@@ -327,10 +350,10 @@ export const createIncome = async (req, res) => {
         color: color.trim(),
         degree: degree?.trim() || null,
         lotNumber: lotNumber.trim(),
-        area: parseFloat(area),                     // current
-        length: parseFloat(length),                 // current
-        initialArea,                                // ✅ snapshot
-        initialLength,                              // ✅ snapshot
+        area: parseFloat(area),
+        length: parseFloat(length),
+        initialArea,
+        initialLength,
         customerId: finalCustomerId,
         typeId,
         categoryId,
@@ -338,6 +361,9 @@ export const createIncome = async (req, res) => {
         amount: parseFloat(amount),
         paidAmount: 0,
         remaind: parseFloat(amount),
+        // ✅ NEW: persist currency fields on the income row
+        isAfn: incomeCurrency.isAfn,
+        DV: incomeCurrency.DV,
       }, { transaction });
 
       createdIncomes.push(newIncome);
@@ -368,6 +394,22 @@ export const createIncome = async (req, res) => {
     for (const income of createdIncomes) {
       await addIncomeToCategoryEIncome(income.categoryId, income.id);
     }
+
+    // ----- ✅ NEW: derive bill-level currency from the created incomes -----
+    // Rule: bill is AFN only if ALL incomes are AFN. Otherwise USD.
+    // DV: if all incomes share the same DV, use it; else fall back to the
+    // body-level default (or 65) since the bill has mixed DV values.
+    const allSameCurrency = createdIncomes.every(
+      (i) => i.isAfn === createdIncomes[0].isAfn
+    );
+    const allSameDV = createdIncomes.every(
+      (i) => parseFloat(i.DV) === parseFloat(createdIncomes[0].DV)
+    );
+    const billIsAfn = allSameCurrency ? !!createdIncomes[0].isAfn : false;
+    const billDV = allSameDV
+      ? parseFloat(createdIncomes[0].DV)
+      : (bodyCurrencyDefaults.DV ?? 65);
+
     // ----- Create incomeBill -----
     const billNumber = await generateBillNumber();
     const totalPaid = parseFloat(totalReceipt) || 0;
@@ -388,6 +430,9 @@ export const createIncome = async (req, res) => {
       discount_percent: 0,
       discounted_amount: 0,
       Incomes: createdIncomes.map(i => i.id),
+      // ✅ NEW: persist currency fields on the bill
+      isAfn: billIsAfn,
+      DV: billDV,
     });
 
     let newPay = null;
@@ -396,6 +441,9 @@ export const createIncome = async (req, res) => {
         customerId: finalCustomerId,
         amountofmoney: totalPaid,
         description: `پرداخت بابت فاکتور ${billNumber}`,
+        // ✅ NEW: propagate currency from the bill to the payment
+        isAfn: billIsAfn,
+        DV: billDV,
       });
       await addPayToCustomerAccount(finalCustomerId, newPay.id);
     }
@@ -479,6 +527,20 @@ export const updateIncome = async (req, res) => {
     if (lotNumber !== undefined) income.lotNumber = lotNumber;
     if (area !== undefined) income.area = area;
     if (newCategoryId !== undefined) income.categoryId = newCategoryId;
+
+    // ✅ NEW: allow updating currency fields
+    if (req.body.isAfn !== undefined || req.body.DV !== undefined) {
+      try {
+        const updated = resolveCurrencyFields(req.body, {
+          isAfn: income.isAfn,
+          DV: income.DV,
+        });
+        income.isAfn = updated.isAfn;
+        income.DV = updated.DV;
+      } catch (e) {
+        return res.status(400).json({ message: e.message });
+      }
+    }
 
     // NOTE: initialLength & initialArea are intentionally NOT touched here —
     // they represent the original dimensions at creation time.

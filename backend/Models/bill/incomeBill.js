@@ -54,12 +54,25 @@ const IncomeBill = sequelize.define(
       defaultValue: [],
       comment: "Array of carpet income IDs or objects",
     },
-    // ─── NEW: Blanket (Bincome) entries ──────────────────────────────
+    // ─── Blanket (Bincome) entries ──────────────────────────────
     bIncome: {
       type: DataTypes.JSON,
       allowNull: false,
       defaultValue: [],
       comment: "Array of blanket income (Bincome) IDs or objects",
+    },
+    // ─── Currency / exchange rate ───────────────────────────────
+    isAfn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "Whether the currency is Afghan Afghani (AFN); false means USD",
+    },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 65,
+      comment: "Dollar value / exchange rate — default 65 (AFN per USD)",
     },
   },
   {

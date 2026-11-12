@@ -31,12 +31,25 @@ const Pay = sequelize.define(
       allowNull: true,
       comment: "Optional note or description",
     },
-    // ─── NEW: Currency indicator ──────────────────────────────────────
-    is_Afs: {
+    // ─── NEW: standardized currency fields ────────────────────────────
+    isAfn: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: false,
-      comment: "True if amount is in Afghanis, False if in other currency (e.g., USD)",
+      comment: "Whether the currency is Afghan Afghani (AFN); false means USD",
+    },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 65,
+      comment: "Dollar value / exchange rate — default 65 (AFN per USD)",
+    },
+        appliedTo: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      defaultValue: [],
+      comment:
+        "Array of { billId, billCurrency, appliedInBillCurrency, consumedInPaymentCurrency, rate }",
     },
   },
   {

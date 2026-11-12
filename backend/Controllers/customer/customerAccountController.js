@@ -108,79 +108,142 @@ export const deleteCustomerAccount = async (req, res) => {
         res.status(500).json({ message: 'Server error', error: error.message });
     }
 };
-
-// ---------- Custom endpoints (corrected for model) ----------
-// GET /api/customer-account/report/unpaid-summary
-// Returns list of customers with unpaid bills, summing the remaind from IncomeBill
 export const getCustomersWithUnpaid = async (req, res) => {
-    try {
-        // Find all CustomerAccounts with non-empty unpaid array
-        const accounts = await CustomerAccount.findAll({
-            where: {
-                unpaid: { [Op.ne]: [] }  // not an empty array
-            },
-            attributes: ['customerId', 'unpaid'],
-        });
-        if (!accounts.length) {
-            return res.status(200).json({ success: true, data: [], total: 0 });
-        }
-        // Collect all unpaid bill IDs
-        const allUnpaidBillIds = [];
-        for (const acc of accounts) {
-            const unpaid = acc.unpaid || [];
-            allUnpaidBillIds.push(...unpaid);
-        }
-        if (allUnpaidBillIds.length === 0) {
-            return res.status(200).json({ success: true, data: [], total: 0 });
-        }
-        // Fetch IncomeBills with remainding amount > 0
-        const unpaidBills = await IncomeBill.findAll({
-            where: {
-                id: allUnpaidBillIds,
-                remainingAmount: { [Op.gt]: 0 }
-            },
-            attributes: ['id', 'customerId', 'remainingAmount', 'totalAmount', 'paidAmount']
-        });
-        // Group by customerId
-        const customerMap = new Map();
-        for (const bill of unpaidBills) {
-            const custId = bill.customerId;
-            const amount = parseFloat(bill.remainingAmount);
-            if (!customerMap.has(custId)) {
-                customerMap.set(custId, { total_due: 0, bills: [] });
-            }
-            const entry = customerMap.get(custId);
-            entry.total_due += amount;
-            entry.bills.push({ billId: bill.id, remaining: amount });
-        }
-        const customerIds = Array.from(customerMap.keys());
-        const customers = await Customer.findAll({
-            where: { id: customerIds },
-            attributes: ['id', 'fullname']
-        });
-        const responseData = [];
-        let grandTotal = 0;
-        for (const cust of customers) {
-            const data = customerMap.get(cust.id);
-            responseData.push({
-                customer: { id: cust.id, fullname: cust.fullname },
-                total_due: data.total_due,
-                details: data.bills   // optional
-            });
-            grandTotal += data.total_due;
-        }
-        return res.status(200).json({ success: true, data: responseData, total: grandTotal });
-    } catch (error) {
-        console.error('Error fetching customers with unpaid:', error);
-        return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  try {
+    // Find all CustomerAccounts with non-empty unpaid array
+    const accounts = await CustomerAccount.findAll({
+      where: {
+        unpaid: { [Op.ne]: [] }, // not an empty array
+      },
+      attributes: ["customerId", "unpaid"],
+    });
+
+    if (!accounts.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: { afn: 0, usd: 0 }, // ✅ NEW: grouped total
+      });
     }
+
+    // Collect all unpaid bill IDs
+    const allUnpaidBillIds = [];
+    for (const acc of accounts) {
+      const unpaid = acc.unpaid || [];
+      allUnpaidBillIds.push(...unpaid);
+    }
+
+    if (allUnpaidBillIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: { afn: 0, usd: 0 },
+      });
+    }
+
+    // ✅ NEW: include isAfn + DV so we can group per currency
+    const unpaidBills = await IncomeBill.findAll({
+      where: {
+        id: allUnpaidBillIds,
+        remainingAmount: { [Op.gt]: 0 },
+      },
+      attributes: [
+        "id",
+        "customerId",
+        "remainingAmount",
+        "totalAmount",
+        "paidAmount",
+        "isAfn", // ✅
+        "DV",    // ✅
+      ],
+    });
+
+    // ✅ NEW: group by customerId AND by currency.
+    // Structure:
+    //   customerMap: Map<custId, {
+    //     afn: { total_due, bills[], DV },
+    //     usd: { total_due, bills[], DV },
+    //   }>
+    const customerMap = new Map();
+
+    for (const bill of unpaidBills) {
+      const custId = bill.customerId;
+      const amount = parseFloat(bill.remainingAmount) || 0;
+      const isAfn = !!bill.isAfn;
+      const bucketKey = isAfn ? "afn" : "usd";
+
+      if (!customerMap.has(custId)) {
+        customerMap.set(custId, {
+          afn: { total_due: 0, bills: [], DV: null },
+          usd: { total_due: 0, bills: [], DV: null },
+        });
+      }
+
+      const entry = customerMap.get(custId)[bucketKey];
+      entry.total_due += amount;
+      entry.bills.push({
+        billId: bill.id,
+        remaining: amount,
+        DV: bill.DV != null ? parseFloat(bill.DV) : null,
+      });
+
+      // Track the DV used for this currency bucket. If bills disagree
+      // (rare), we keep the most recent value and mark the bucket as mixed.
+      const billDV = bill.DV != null ? parseFloat(bill.DV) : null;
+      if (billDV != null) {
+        if (entry.DV === null) entry.DV = billDV;
+        else if (entry.DV !== billDV) entry.DV = "mixed";
+      }
+    }
+
+    const customerIds = Array.from(customerMap.keys());
+    const customers = await Customer.findAll({
+      where: { id: customerIds },
+      attributes: ["id", "fullname"],
+    });
+
+    // ✅ NEW: build response — one row per (customer, currency) with debt
+    const responseData = [];
+    const grandTotal = { afn: 0, usd: 0 };
+
+    for (const cust of customers) {
+      const buckets = customerMap.get(cust.id);
+      if (!buckets) continue;
+
+      for (const currency of ["usd", "afn"]) {
+        const bucket = buckets[currency];
+        if (bucket.total_due <= 0) continue;
+
+        responseData.push({
+          customer: { id: cust.id, fullname: cust.fullname },
+          total_due: Number(bucket.total_due.toFixed(2)),
+          isAfn: currency === "afn",
+          DV: bucket.DV, // number, null, or "mixed"
+          details: bucket.bills,
+        });
+
+        grandTotal[currency] += bucket.total_due;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: responseData,
+      total: {
+        afn: Number(grandTotal.afn.toFixed(2)),
+        usd: Number(grandTotal.usd.toFixed(2)),
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching customers with unpaid:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
 };
 
-// GET /api/customer-account/:customerId/sells?page=1&limit=10
-// Returns sells from the customer's "total" array (which stores IncomeBill IDs, not Sells IDs)
-// But the original code tried to fetch Sell records. To be consistent, we need to decide:
-// The "total" array holds IncomeBill IDs. So we should fetch IncomeBill, not Sells.
-// I'll change it to return bills instead of sells.
 export const getCustomerSellsFromTotal = async (req, res) => {
     try {
         const { customerId } = req.params;

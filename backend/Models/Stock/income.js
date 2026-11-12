@@ -66,6 +66,18 @@ const Income = sequelize.define(
       defaultValue: [],
       comment: "Array of IDs for sales",
     },
+    isAfn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "Whether the currency is Afghan Afghani (AFN); false means USD",
+    },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 65,
+      comment: "Dollar value / exchange rate — default 65 (AFN per USD)",
+    },
   },
   {
     timestamps: true,
