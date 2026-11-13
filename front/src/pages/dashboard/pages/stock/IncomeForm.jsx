@@ -7,20 +7,33 @@ const API_BASE_URL = `${BASE_URL}/income`;
 const CUSTOMER_API = `${BASE_URL}/customer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
+// ✅ NEW: helpers for currency display
+const CURRENCY_SYMBOL = { afn: "؋", usd: "$" };
+const symbolFor = (isAfn) => (isAfn ? CURRENCY_SYMBOL.afn : CURRENCY_SYMBOL.usd);
+
+const emptyEntry = (defaults = {}) => ({
+  typeId: "",
+  categoryId: "",
+  width: "",
+  color: "",
+  degree: "",
+  lotNumber: "",
+  area: "",
+  length: "",
+  unit_price: "",
+  total: "",
+  // ✅ NEW: per-row currency
+  isAfn: defaults.isAfn ?? false,
+  DV: defaults.DV ?? 65,
+});
+
 const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
+  // ✅ NEW: global currency (applies to all rows unless overridden)
+  const [globalIsAfn, setGlobalIsAfn] = useState(false);
+  const [globalDV, setGlobalDV] = useState(65);
+
   const [entries, setEntries] = useState(
-    initialEntries || [{
-      typeId: "",
-      categoryId: "",
-      width: "",
-      color: "",
-      degree: "",
-      lotNumber: "",
-      area: "",
-      length: "",           // for display only
-      unit_price: "",
-      total: ""             // calculated = area * unit_price
-    }]
+    initialEntries || [emptyEntry()]
   );
   const [customers, setCustomers] = useState([]);
   const [customerMode, setCustomerMode] = useState("existing");
@@ -38,6 +51,17 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     fetchCustomers();
     fetchTypes();
   }, []);
+
+  // ✅ NEW: when editing, hydrate global currency from the first entry
+  useEffect(() => {
+    if (initialEntries && initialEntries.length > 0) {
+      const first = initialEntries[0];
+      if (first.isAfn !== undefined) setGlobalIsAfn(!!first.isAfn);
+      if (first.DV !== undefined && first.DV !== null) {
+        setGlobalDV(parseFloat(first.DV) || 65);
+      }
+    }
+  }, [initialEntries]);
 
   const fetchCustomers = async () => {
     try {
@@ -74,7 +98,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     const area = parseFloat(entry.area) || 0;
     const length = (width > 0 && area > 0) ? (area / width) : 0;
     const unit_price = parseFloat(entry.unit_price) || 0;
-    const total = area * unit_price;  // ✅ total based on area
+    const total = area * unit_price;
     return {
       length: length.toFixed(2),
       total: total.toFixed(2)
@@ -90,7 +114,11 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       fetchCategoriesForType(value);
     }
 
-    // Recalculate length and total when width, area, or unit_price changes
+    // ✅ NEW: when global currency changes, propagate to all rows that
+    // haven't been explicitly overridden. Simpler UX: propagate to ALL
+    // rows only if the user toggles the global (see onChange below).
+    // Here we just handle per-row change.
+
     if (["width", "area", "unit_price"].includes(field)) {
       const { length, total } = calculateEntryValues(newEntries[index]);
       newEntries[index].length = length;
@@ -100,19 +128,34 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     setEntries(newEntries);
   };
 
+  // ✅ NEW: change currency for a single row
+  const handleRowCurrencyChange = (index, isAfn) => {
+    const newEntries = [...entries];
+    newEntries[index].isAfn = isAfn;
+    setEntries(newEntries);
+  };
+
+  // ✅ NEW: change DV for a single row
+  const handleRowDVChange = (index, DV) => {
+    const newEntries = [...entries];
+    newEntries[index].DV = DV;
+    setEntries(newEntries);
+  };
+
+  // ✅ NEW: change currency for ALL rows at once
+  const applyGlobalCurrency = (isAfn) => {
+    setGlobalIsAfn(isAfn);
+    setEntries(prev => prev.map(e => ({ ...e, isAfn })));
+  };
+
+  // ✅ NEW: change DV for ALL rows at once
+  const applyGlobalDV = (DV) => {
+    setGlobalDV(DV);
+    setEntries(prev => prev.map(e => ({ ...e, DV })));
+  };
+
   const addEntry = () => {
-    setEntries([...entries, {
-      typeId: "",
-      categoryId: "",
-      width: "",
-      color: "",
-      degree: "",
-      lotNumber: "",
-      area: "",
-      length: "",
-      unit_price: "",
-      total: ""
-    }]);
+    setEntries([...entries, emptyEntry({ isAfn: globalIsAfn, DV: globalDV })]);
   };
 
   const removeEntry = (index) => {
@@ -131,6 +174,8 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (!entry.color.trim()) return "رنگ الزامی است";
     if (!entry.lotNumber.trim()) return "شماره لات الزامی است";
     if (!entry.unit_price || parseFloat(entry.unit_price) <= 0) return "قیمت واحد باید بزرگتر از صفر باشد";
+    // ✅ NEW: DV must be positive
+    if (!entry.DV || parseFloat(entry.DV) <= 0) return "نرخ دالر باید بزرگتر از صفر باشد";
     return null;
   };
 
@@ -181,7 +226,7 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     const incomesArray = entries.map(entry => {
       const area = parseFloat(entry.area);
       const unit_price = parseFloat(entry.unit_price);
-      const amount = area * unit_price;          // ✅ amount = area × unit_price
+      const amount = area * unit_price;
       return {
         typeId: entry.typeId,
         categoryId: entry.categoryId,
@@ -191,12 +236,18 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         lotNumber: entry.lotNumber.trim(),
         area: area,
         unit_price: unit_price,
-        amount: amount.toFixed(2)
+        amount: amount.toFixed(2),
+        // ✅ NEW: per-income currency
+        isAfn: !!entry.isAfn,
+        DV: parseFloat(entry.DV) || 65,
       };
     });
 
     mainPayload.incomes = incomesArray;
     mainPayload.totalReceipt = receiptValue;
+    // ✅ NEW: global currency defaults (backend uses these for the bill)
+    mainPayload.isAfn = !!globalIsAfn;
+    mainPayload.DV = parseFloat(globalDV) || 65;
 
     setSubmitLoading(true);
     setError("");
@@ -208,22 +259,13 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
       onSuccess();
       if (!editingId) {
-        setEntries([{
-          typeId: "",
-          categoryId: "",
-          width: "",
-          color: "",
-          degree: "",
-          lotNumber: "",
-          area: "",
-          length: "",
-          unit_price: "",
-          total: ""
-        }]);
+        setEntries([emptyEntry()]);
         setCustomerMode("existing");
         setSelectedCustomerId("");
         setNewCustomerName("");
         setTotalReceipt("");
+        setGlobalIsAfn(false);
+        setGlobalDV(65);
       } else {
         onCancel();
       }
@@ -278,6 +320,45 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         )}
       </div>
 
+      {/* ✅ NEW: Global currency controls */}
+      <div className="mb-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">واحد پول پیش‌فرض:</span>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={globalIsAfn === false}
+                onChange={() => applyGlobalCurrency(false)}
+              />
+              دالر ($)
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={globalIsAfn === true}
+                onChange={() => applyGlobalCurrency(true)}
+              />
+              افغانی (؋)
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">نرخ دالر (DV):</span>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={globalDV}
+              onChange={(e) => applyGlobalDV(e.target.value)}
+              className="w-28 border rounded-lg px-2 py-1 text-sm"
+            />
+          </div>
+          <span className="text-xs text-gray-500">
+            (این مقدار به همه ردیف‌ها اعمال می‌شود؛ هر ردیف می‌تواند جداگانه تغییر کند)
+          </span>
+        </div>
+      </div>
+
       <form onSubmit={handleSubmit}>
         <div className="overflow-x-auto mb-4">
           <table className="w-full text-sm border-collapse">
@@ -292,7 +373,10 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">رنگ*</th>
                 <th className="p-2 border">درجه</th>
                 <th className="p-2 border">شماره لات*</th>
-                <th className="p-2 border">قیمت واحد (؋/م²)*</th>
+                <th className="p-2 border">قیمت واحد*</th>
+                {/* ✅ NEW: per-row currency + DV columns */}
+                <th className="p-2 border">واحد</th>
+                <th className="p-2 border">DV</th>
                 <th className="p-2 border">مبلغ کل (محاسبه)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
@@ -343,7 +427,32 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                   <td className="p-2">
                     <input type="number" step="any" value={entry.unit_price} onChange={(e) => handleEntryChange(idx, "unit_price", e.target.value)} className="w-24 border rounded px-1 py-1" required />
                   </td>
-                  <td className="p-2 text-gray-700 font-medium">{entry.total || "—"}دالر</td>
+                  {/* ✅ NEW: per-row currency select */}
+                  <td className="p-2">
+                    <select
+                      value={entry.isAfn ? "afn" : "usd"}
+                      onChange={(e) => handleRowCurrencyChange(idx, e.target.value === "afn")}
+                      className="w-20 border rounded px-1 py-1"
+                    >
+                      <option value="usd">$ دالر</option>
+                      <option value="afn">؋ افغانی</option>
+                    </select>
+                  </td>
+                  {/* ✅ NEW: per-row DV */}
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={entry.DV}
+                      onChange={(e) => handleRowDVChange(idx, e.target.value)}
+                      className="w-20 border rounded px-1 py-1"
+                      required
+                    />
+                  </td>
+                  <td className="p-2 text-gray-700 font-medium">
+                    {entry.total || "—"} {symbolFor(entry.isAfn)}
+                  </td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
                       <FaMinusCircle />
@@ -370,7 +479,9 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
-              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)}دالر</div>
+              <div className="text-2xl font-bold text-indigo-700">
+                {totalAmount.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ پرداختی (کل)</label>
@@ -385,12 +496,12 @@ const IncomeForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
-              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)}دالر</div>
+              <div className="text-2xl font-bold text-red-600">
+                {totalRemaind.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
           </div>
         </div>
-
-
       </form>
     </div>
   );

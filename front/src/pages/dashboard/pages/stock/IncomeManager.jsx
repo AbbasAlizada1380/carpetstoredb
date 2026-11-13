@@ -2,12 +2,16 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
 import IncomeForm from "./IncomeForm";
-import Pagination from "../../pagination/Pagination"; // adjust path if needed
+import Pagination from "../../pagination/Pagination";
 import BincomeManager from "./BincomeManager";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE_URL = `${BASE_URL}/income`;
-const LIMIT = 20; // items per page
+const LIMIT = 20;
+
+// ✅ NEW: currency symbols
+const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
+const currencyLabel = (isAfn) => (isAfn ? "افغانی" : "دالر");
 
 const IncomeManager = () => {
   const [incomes, setIncomes] = useState([]);
@@ -45,7 +49,6 @@ const IncomeManager = () => {
     fetchIncomes(newPage);
   };
 
-  // After any mutation (create, edit, delete) we go back to page 1
   const refreshAfterMutation = () => {
     fetchIncomes(1);
   };
@@ -71,8 +74,6 @@ const IncomeManager = () => {
     setLoading(true);
     try {
       await axios.delete(`${API_BASE_URL}/${id}`);
-      // after deletion, refetch page 1; if the only item on last page was deleted,
-      // going to page 1 will show the previous page's items.
       refreshAfterMutation();
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
@@ -91,9 +92,15 @@ const IncomeManager = () => {
         lotNumber: editingIncome.lotNumber,
         area: editingIncome.area,
         length: editingIncome.length,
+        // ✅ NEW: include currency fields so edit form preserves them
+        isAfn: !!editingIncome.isAfn,
+        DV: editingIncome.DV ?? 65,
       }];
     }
-    return [{ width: "", color: "", degree: "", lotNumber: "", area: "", length: "" }];
+    return [{
+      width: "", color: "", degree: "", lotNumber: "", area: "", length: "",
+      isAfn: false, DV: 65,
+    }];
   };
 
   return (
@@ -197,6 +204,9 @@ const IncomeManager = () => {
                     <th className="p-3 border-b font-semibold">شماره لات</th>
                     <th className="p-3 border-b font-semibold">مساحت</th>
                     <th className="p-3 border-b font-semibold">طول</th>
+                    {/* ✅ NEW: currency + DV columns */}
+                    <th className="p-3 border-b font-semibold">واحد</th>
+                    <th className="p-3 border-b font-semibold">نرخ دالر</th>
                     <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
                 </thead>
@@ -210,6 +220,17 @@ const IncomeManager = () => {
                       <td className="p-3 font-mono text-sm">{inc.lotNumber}</td>
                       <td className="p-3">{inc.area}</td>
                       <td className="p-3">{inc.length}</td>
+                      {/* ✅ NEW: render currency badge */}
+                      <td className="p-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                          inc.isAfn
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {symbolFor(inc.isAfn)} {currencyLabel(inc.isAfn)}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-600">{inc.DV ?? "—"}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-2">
                           <button
@@ -233,7 +254,6 @@ const IncomeManager = () => {
                 </tbody>
               </table>
             </div>
-            {/* Pagination component */}
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}

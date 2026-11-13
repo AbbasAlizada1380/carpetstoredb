@@ -10,6 +10,13 @@ import VazirmatnTTF from "../../../../../public/ttf/Vazirmatn.js";
 moment.locale("en");
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 
+// Helper to get currency symbol from payment
+const getCurrency = (payment) => (payment.isAfn ? "؋" : "$");
+
+// Helper to format amount with currency
+const formatAmount = (payment) =>
+  `${parseFloat(payment.amountofmoney).toFixed(2)} ${getCurrency(payment)}`;
+
 const PaymentReportsDownload = () => {
   const [loading, setLoading] = useState(false);
   const [loadingCustomers, setLoadingCustomers] = useState(true);
@@ -23,7 +30,6 @@ const PaymentReportsDownload = () => {
     const fetchCustomers = async () => {
       try {
         const res = await axios.get(`${BASE_URL}/customer?limit=300`);
-        // API returns { customers: [...], pagination: {...} }
         setCustomers(res.data.customers || []);
       } catch (err) {
         console.error("Error fetching customers:", err);
@@ -41,7 +47,19 @@ const PaymentReportsDownload = () => {
     if (startDate) params.append("startDate", startDate);
     if (endDate) params.append("endDate", endDate);
     const response = await axios.get(`${BASE_URL}/pay/filter?${params.toString()}`);
-    return response.data.data; // { data: [...], pagination: {...} }
+    return response.data.data;
+  };
+
+  // Compute totals separately per currency (can't sum AFN + USD directly)
+  const computeTotals = (payments) => {
+    let afnTotal = 0;
+    let usdTotal = 0;
+    payments.forEach((p) => {
+      const amt = parseFloat(p.amountofmoney) || 0;
+      if (p.isAfn) afnTotal += amt;
+      else usdTotal += amt;
+    });
+    return { afnTotal, usdTotal };
   };
 
   const handlePDFDownload = async () => {
@@ -62,7 +80,7 @@ const PaymentReportsDownload = () => {
 
       const today = moment().format("YYYY/MM/DD");
       const filterDesc = [];
-      const selectedCustomer = customers.find(c => c.id === parseInt(customerId));
+      const selectedCustomer = customers.find((c) => c.id === parseInt(customerId));
       if (selectedCustomer) filterDesc.push(`مشتری: ${selectedCustomer.fullname}`);
       else if (customerId) filterDesc.push(`مشتری ID: ${customerId}`);
       if (startDate) filterDesc.push(`از تاریخ: ${startDate}`);
@@ -77,12 +95,13 @@ const PaymentReportsDownload = () => {
         { align: "right" }
       );
 
-      // Table headers
-      const headers = [["ID", "مشتری", "مبلغ (؋)", "توضیحات", "تاریخ ایجاد"]];
-      const body = payments.map(p => [
+      // Table headers — include currency column
+      const headers = [["ID", "مشتری", "مبلغ", "واحد پول", "توضیحات", "تاریخ ایجاد"]];
+      const body = payments.map((p) => [
         p.id,
         p.customer?.fullname || `مشتری ${p.customerId}`,
-        p.amountofmoney,
+        parseFloat(p.amountofmoney).toFixed(2),
+        p.isAfn ? "؋ (AFN)" : "$ (USD)",
         p.description || "-",
         moment(p.createdAt).format("YYYY/MM/DD"),
       ]);
@@ -98,21 +117,39 @@ const PaymentReportsDownload = () => {
       });
 
       const finalY = doc.lastAutoTable.finalY + 20;
-      const totalAmount = payments.reduce((sum, p) => sum + parseFloat(p.amountofmoney), 0);
+      const { afnTotal, usdTotal } = computeTotals(payments);
       doc.setFontSize(11);
-      doc.text(
-        `مجموع مبلغ: ${totalAmount.toFixed(2)} ؋`,
-        doc.internal.pageSize.getWidth() - 40,
-        finalY,
-        { align: "right" }
-      );
+
+      let y = finalY;
+      if (afnTotal > 0) {
+        doc.text(
+          ` مجموع مبلغ به افغانی: ${afnTotal.toFixed(2)} ؋`,
+          doc.internal.pageSize.getWidth() - 40,
+          y,
+          { align: "right" }
+        );
+        y += 16;
+      }
+      if (usdTotal > 0) {
+        doc.text(
+          `مجموع مبلغ به دالر: ${usdTotal.toFixed(2)} `,
+          doc.internal.pageSize.getWidth() - 40,
+          y,
+          { align: "right" }
+        );
+      }
 
       // Page numbers
       const pageCount = doc.internal.getNumberOfPages();
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(9);
-        doc.text(`${i}/${pageCount}`, doc.internal.pageSize.getWidth() - 40, doc.internal.pageSize.getHeight() - 30, { align: "right" });
+        doc.text(
+          `${i}/${pageCount}`,
+          doc.internal.pageSize.getWidth() - 40,
+          doc.internal.pageSize.getHeight() - 30,
+          { align: "right" }
+        );
       }
 
       doc.save(`payments_${moment().format("YYYY-MM-DD")}.pdf`);
@@ -136,9 +173,8 @@ const PaymentReportsDownload = () => {
 
       const workbook = XLSX.utils.book_new();
 
-      // Summary sheet
       const filterDesc = [];
-      const selectedCustomer = customers.find(c => c.id === parseInt(customerId));
+      const selectedCustomer = customers.find((c) => c.id === parseInt(customerId));
       if (selectedCustomer) filterDesc.push(`مشتری: ${selectedCustomer.fullname}`);
       else if (customerId) filterDesc.push(`مشتری ID: ${customerId}`);
       if (startDate) filterDesc.push(`از تاریخ: ${startDate}`);
@@ -150,29 +186,42 @@ const PaymentReportsDownload = () => {
         ["تاریخ گزارش", moment().format("YYYY/MM/DD")],
         ["فیلترها", filterText],
         [],
-        ["ID", "مشتری", "مبلغ (؋)", "توضیحات", "تاریخ ایجاد", "زمان ایجاد"],
+        ["ID", "مشتری", "مبلغ", "واحد پول", "توضیحات", "تاریخ ایجاد", "زمان ایجاد"],
       ];
 
-      payments.forEach(p => {
+      payments.forEach((p) => {
         summaryData.push([
           p.id,
           p.customer?.fullname || p.customerId,
-          p.amountofmoney,
+          parseFloat(p.amountofmoney).toFixed(2),
+          p.isAfn ? "AFN (؋)" : "USD ($)",
           p.description || "-",
           moment(p.createdAt).format("YYYY/MM/DD"),
           moment(p.createdAt).format("HH:mm:ss"),
         ]);
       });
 
-      const totalAmount = payments.reduce((sum, p) => sum + parseFloat(p.amountofmoney), 0);
-      summaryData.push([], ["جمع کل", "", totalAmount.toFixed(2), "", "", ""]);
+      const { afnTotal, usdTotal } = computeTotals(payments);
+      summaryData.push([]);
+      if (afnTotal > 0) summaryData.push(["جمع کل (AFN)", "", afnTotal.toFixed(2), "؋", "", "", ""]);
+      if (usdTotal > 0) summaryData.push(["جمع کل (USD)", "", usdTotal.toFixed(2), "$", "", "", ""]);
 
       const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
-      summarySheet["!cols"] = [{ wch: 10 }, { wch: 25 }, { wch: 15 }, { wch: 30 }, { wch: 12 }, { wch: 12 }];
+      summarySheet["!cols"] = [
+        { wch: 10 },
+        { wch: 25 },
+        { wch: 15 },
+        { wch: 14 },
+        { wch: 30 },
+        { wch: 12 },
+        { wch: 12 },
+      ];
       XLSX.utils.book_append_sheet(workbook, summarySheet, "پرداخت‌ها");
 
       const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-      const blob = new Blob([excelBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const blob = new Blob([excelBuffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
       saveAs(blob, `payments_${moment().format("YYYY-MM-DD")}.xlsx`);
     } catch (err) {
       console.error(err);
@@ -185,7 +234,6 @@ const PaymentReportsDownload = () => {
   return (
     <div className="p-6 space-y-4">
       <div className="flex flex-wrap gap-4 items-end">
-        {/* Customer dropdown */}
         <div>
           <label className="block text-sm font-medium">انتخاب مشتری (اختیاری)</label>
           {loadingCustomers ? (
@@ -199,7 +247,7 @@ const PaymentReportsDownload = () => {
               className="border rounded px-3 py-2 w-48"
             >
               <option value="">-- همه مشتریان --</option>
-              {customers.map(c => (
+              {customers.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.fullname} (ID: {c.id})
                 </option>
@@ -208,7 +256,6 @@ const PaymentReportsDownload = () => {
           )}
         </div>
 
-        {/* Date range */}
         <div>
           <label className="block text-sm font-medium">از تاریخ</label>
           <input
