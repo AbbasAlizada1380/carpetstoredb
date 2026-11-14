@@ -10,7 +10,6 @@ import { Op } from "sequelize";
 const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) => {
   const db = CustomerAccount.sequelize;
 
-  // Ensure account exists
   let account = await CustomerAccount.findOne({ where: { customerId } });
   if (!account) {
     await CustomerAccount.create({
@@ -24,7 +23,6 @@ const updateCustomerAccountWithBill = async (customerId, billId, isFullyPaid) =>
     });
   }
 
-  // Always add billId to total array
   await db.query(
     `UPDATE CustomerAccounts 
      SET total = JSON_ARRAY_APPEND(COALESCE(total, JSON_ARRAY()), '$', :billId)
@@ -151,6 +149,75 @@ const updateBExistStock = async (categoryId, newQuantity, newUnitPrice, transact
   );
 };
 
+// ─── HELPER: Parse & validate DV / isAfn from an entry ────────────────────
+const parseDvAndIsAfn = (entry, index) => {
+  // DV: default 0, must be a finite number if provided
+  let dv = 0;
+  if (entry.DV !== undefined && entry.DV !== null && entry.DV !== "") {
+    const parsedDv = parseFloat(entry.DV);
+    if (!Number.isFinite(parsedDv)) {
+      throw new Error(`Entry ${index + 1}: DV must be a valid number`);
+    }
+    dv = parsedDv;
+  }
+
+  // isAfn: default false, coerce common truthy/falsy shapes
+  let isAfn = false;
+  if (entry.isAfn !== undefined && entry.isAfn !== null && entry.isAfn !== "") {
+    if (typeof entry.isAfn === "boolean") {
+      isAfn = entry.isAfn;
+    } else if (entry.isAfn === 1 || entry.isAfn === "1" || entry.isAfn === "true") {
+      isAfn = true;
+    } else if (entry.isAfn === 0 || entry.isAfn === "0" || entry.isAfn === "false") {
+      isAfn = false;
+    } else {
+      throw new Error(`Entry ${index + 1}: isAfn must be a boolean`);
+    }
+  }
+
+  return { dv, isAfn };
+};
+
+// ─── HELPER: Resolve bill-level currency from body / entries ──────────────
+// The bill has a single currency. If the client sent top-level `isAfn` / `DV`,
+// we honor those. Otherwise we fall back to the first entry's values so the
+// bill reflects what was actually stored on the Bincome rows.
+const resolveBillCurrency = (body, parsedEntries) => {
+  const firstEntry = parsedEntries[0] || {};
+
+  // isAfn
+  let billIsAfn;
+  if (body.isAfn !== undefined && body.isAfn !== null && body.isAfn !== "") {
+    if (typeof body.isAfn === "boolean") {
+      billIsAfn = body.isAfn;
+    } else if (body.isAfn === 1 || body.isAfn === "1" || body.isAfn === "true") {
+      billIsAfn = true;
+    } else if (body.isAfn === 0 || body.isAfn === "0" || body.isAfn === "false") {
+      billIsAfn = false;
+    } else {
+      throw new Error("Bill-level isAfn must be a boolean");
+    }
+  } else {
+    billIsAfn = !!firstEntry.isAfn;
+  }
+
+  // DV
+  let billDv;
+  if (body.DV !== undefined && body.DV !== null && body.DV !== "") {
+    const parsed = parseFloat(body.DV);
+    if (!Number.isFinite(parsed)) {
+      throw new Error("Bill-level DV must be a valid number");
+    }
+    billDv = parsed;
+  } else if (firstEntry.DV !== undefined && firstEntry.DV !== null) {
+    billDv = parseFloat(firstEntry.DV) || 0;
+  } else {
+    billDv = 0;
+  }
+
+  return { isAfn: billIsAfn, DV: billDv };
+};
+
 // ─── CREATE ──────────────────────────────────────────────────────────────────
 export const createBincome = async (req, res) => {
   let transaction;
@@ -186,17 +253,12 @@ export const createBincome = async (req, res) => {
       throw new Error("Either customerId or newCustomer is required");
     }
 
-    // ── Create Bincome records & update stock ──
-    const createdBincomes = [];
-
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
+    // ── Parse + validate entries first (need currency info for the bill) ──
+    const parsedEntries = entries.map((entry, i) => {
       const { categoryId, amount, weight, unitPrice } = entry;
 
-      // Validation
       if (!categoryId) throw new Error(`Entry ${i + 1}: Category ID is required`);
       if (!amount || parseFloat(amount) <= 0) throw new Error(`Entry ${i + 1}: Amount must be a positive number`);
-      // Weight is optional – only validate if it is provided
       if (weight !== undefined && weight !== null && weight !== "") {
         const weightNum = parseFloat(weight);
         if (isNaN(weightNum) || weightNum <= 0) {
@@ -205,8 +267,7 @@ export const createBincome = async (req, res) => {
       }
       if (!unitPrice || parseFloat(unitPrice) <= 0) throw new Error(`Entry ${i + 1}: Unit price must be a positive number`);
 
-      const categoryExists = await Category.findByPk(categoryId, { transaction });
-      if (!categoryExists) throw new Error(`Entry ${i + 1}: Invalid Category ID ${categoryId}`);
+      const { dv, isAfn } = parseDvAndIsAfn(entry, i);
 
       const parsedAmount = parseFloat(amount);
       const parsedUnitPrice = parseFloat(unitPrice);
@@ -215,24 +276,53 @@ export const createBincome = async (req, res) => {
           ? parseFloat(weight)
           : null;
 
-      const totalPrice = parsedAmount * parsedUnitPrice;
-      const initialAmount = computeInitialAmount(totalPrice, parsedUnitPrice);
-
-      const newBincome = await Bincome.create({
+      return {
         categoryId,
         amount: parsedAmount,
-        initialAmount,
-        weight: parsedWeight,
         unitPrice: parsedUnitPrice,
+        weight: parsedWeight,
+        totalPrice: parsedAmount * parsedUnitPrice,
+        DV: dv,
+        isAfn,
+      };
+    });
+
+    // ── Enforce single-currency-per-bill (the bill row holds one isAfn) ──
+    const currencies = new Set(parsedEntries.map((e) => e.isAfn));
+    if (currencies.size > 1) {
+      throw new Error(
+        "All entries in a single bill must use the same currency (isAfn). Split mixed-currency entries into separate bills."
+      );
+    }
+
+    // ── Resolve bill-level currency (body overrides, else first entry) ──
+    const billCurrency = resolveBillCurrency(req.body, parsedEntries);
+
+    // ── Create Bincome records & update stock ──
+    const createdBincomes = [];
+
+    for (const pe of parsedEntries) {
+      const categoryExists = await Category.findByPk(pe.categoryId, { transaction });
+      if (!categoryExists) throw new Error(`Invalid Category ID ${pe.categoryId}`);
+
+      const initialAmount = computeInitialAmount(pe.totalPrice, pe.unitPrice);
+
+      const newBincome = await Bincome.create({
+        categoryId: pe.categoryId,
+        amount: pe.amount,
+        initialAmount,
+        weight: pe.weight,
+        unitPrice: pe.unitPrice,
         customerId: finalCustomerId,
         paidAmount: 0,
-        remaind: totalPrice,
+        remaind: pe.totalPrice,
+        DV: pe.DV,
+        isAfn: pe.isAfn,
       }, { transaction });
 
       createdBincomes.push(newBincome);
 
-      // Update stock
-      await updateBExistStock(categoryId, parsedAmount, parsedUnitPrice, transaction);
+      await updateBExistStock(pe.categoryId, pe.amount, pe.unitPrice, transaction);
     }
 
     await transaction.commit();
@@ -262,7 +352,7 @@ export const createBincome = async (req, res) => {
       await addBincomeToCategoryBIncome(bincome.categoryId, bincome.id);
     }
 
-    // ── Create IncomeBill ──
+    // ── Create IncomeBill (with currency) ──
     const billNumber = await generateBincomeBillNumber();
     const totalPaid = parseFloat(totalReceipt) || 0;
     const remainingAmount = totalInvoiceAmount - totalPaid;
@@ -283,9 +373,14 @@ export const createBincome = async (req, res) => {
       discounted_amount: 0,
       Incomes: [],
       bIncome: createdBincomes.map(b => b.id),
+      // ✅ currency on the bill
+      isAfn: billCurrency.isAfn,
+      DV: billCurrency.DV,
     });
 
     // ── Create Pay record if payment received ──
+    // NOTE: Pay.is_Afs stays independent; if you want it to mirror the bill
+    // currency, replace `is_Afs: true` with `is_Afs: billCurrency.isAfn`.
     let newPay = null;
     if (totalPaid > 0) {
       newPay = await Pay.create({
@@ -340,16 +435,16 @@ export const getAllBincome = async (req, res) => {
       offset,
     });
 
-    // Attach totalPrice and (recomputed) initialAmount for response
     const dataWithTotal = rows.map((item) => {
       const amount = parseFloat(item.amount) || 0;
       const unitPrice = parseFloat(item.unitPrice) || 0;
       const totalPrice = Math.round((amount * unitPrice) * 100) / 100;
       item.dataValues.totalPrice = totalPrice;
-      // If stored initialAmount is missing, derive it; otherwise keep the stored value
       if (item.initialAmount === undefined || item.initialAmount === null) {
         item.dataValues.initialAmount = computeInitialAmount(totalPrice, unitPrice);
       }
+      item.dataValues.DV = item.DV !== undefined && item.DV !== null ? parseFloat(item.DV) : 0;
+      item.dataValues.isAfn = Boolean(item.isAfn);
       return item.dataValues;
     });
 
@@ -387,6 +482,8 @@ export const getBincomeById = async (req, res) => {
     if (bincome.initialAmount === undefined || bincome.initialAmount === null) {
       bincome.dataValues.initialAmount = computeInitialAmount(totalPrice, unitPrice);
     }
+    bincome.dataValues.DV = bincome.DV !== undefined && bincome.DV !== null ? parseFloat(bincome.DV) : 0;
+    bincome.dataValues.isAfn = Boolean(bincome.isAfn);
 
     res.status(200).json({ success: true, data: bincome.dataValues });
   } catch (error) {
@@ -398,7 +495,7 @@ export const getBincomeById = async (req, res) => {
 export const updateBincome = async (req, res) => {
   try {
     const { id } = req.params;
-    const { categoryId, amount, weight, unitPrice } = req.body;
+    const { categoryId, amount, weight, unitPrice, DV, isAfn } = req.body;
 
     const bincome = await Bincome.findByPk(id);
     if (!bincome) return res.status(404).json({ message: "Bincome record not found" });
@@ -409,6 +506,31 @@ export const updateBincome = async (req, res) => {
     if (amount !== undefined) bincome.amount = parseFloat(amount);
     if (weight !== undefined) bincome.weight = parseFloat(weight);
     if (unitPrice !== undefined) bincome.unitPrice = parseFloat(unitPrice);
+
+    // New fields
+    if (DV !== undefined) {
+      if (DV === null || DV === "") {
+        bincome.DV = 0;
+      } else {
+        const parsedDv = parseFloat(DV);
+        if (!Number.isFinite(parsedDv)) {
+          return res.status(400).json({ error: "DV must be a valid number" });
+        }
+        bincome.DV = parsedDv;
+      }
+    }
+
+    if (isAfn !== undefined) {
+      if (typeof isAfn === "boolean") {
+        bincome.isAfn = isAfn;
+      } else if (isAfn === 1 || isAfn === "1" || isAfn === "true") {
+        bincome.isAfn = true;
+      } else if (isAfn === 0 || isAfn === "0" || isAfn === "false") {
+        bincome.isAfn = false;
+      } else {
+        return res.status(400).json({ error: "isAfn must be a boolean" });
+      }
+    }
 
     // Recalculate remaind and initialAmount
     if (amount !== undefined || unitPrice !== undefined) {
@@ -427,6 +549,8 @@ export const updateBincome = async (req, res) => {
     const amountVal = parseFloat(bincome.amount) || 0;
     const unitPriceVal = parseFloat(bincome.unitPrice) || 0;
     bincome.dataValues.totalPrice = Math.round((amountVal * unitPriceVal) * 100) / 100;
+    bincome.dataValues.DV = bincome.DV !== undefined && bincome.DV !== null ? parseFloat(bincome.DV) : 0;
+    bincome.dataValues.isAfn = Boolean(bincome.isAfn);
 
     res.status(200).json({ success: true, data: bincome.dataValues });
   } catch (error) {
@@ -468,7 +592,6 @@ export const runBackfillBincomeInitialAmount = async () => {
   try {
     t = await sequelize.transaction();
 
-    // ✅ Match rows where initialAmount is NULL or <= 0
     const rows = await Bincome.findAll({
       where: {
         [Op.or]: [

@@ -1,32 +1,30 @@
 // components/BincomeManager.jsx
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { FaPlus, FaEdit, FaTrash, FaSpinner, FaTimes } from "react-icons/fa";
-import Pagination from "../../pagination/Pagination";
+import { FaEdit, FaTrash, FaPlus, FaSpinner, FaTimes } from "react-icons/fa";
 import BincomeForm from "./BincomeForm";
+import Pagination from "../../pagination/Pagination";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
-const API_BASE = `${BASE_URL}/bincome`;
+const API_BASE_URL = `${BASE_URL}/bincome`;
 const CATEGORY_API = `${BASE_URL}/category`;
+const LIMIT = 20;
+
+// ✅ currency symbols
+const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
+const currencyLabel = (isAfn) => (isAfn ? "افغانی" : "دالر");
 
 const BincomeManager = () => {
-  // ─── State ──────────────────────────────────────────────────────────────
   const [bincomes, setBincomes] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editingBincome, setEditingBincome] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  // Filters & pagination
-  const [selectedCategory, setSelectedCategory] = useState("");
-  const [page, setPage] = useState(1);
-  const [limit] = useState(20);
-  const [totalPages, setTotalPages] = useState(0);
-  const [totalItems, setTotalItems] = useState(0);
-
-  // Form visibility & editing
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editingData, setEditingData] = useState(null);
 
   // ─── Fetch categories ──────────────────────────────────────────────────
   useEffect(() => {
@@ -42,79 +40,105 @@ const BincomeManager = () => {
   }, []);
 
   // ─── Fetch Bincome list ────────────────────────────────────────────────
-  const fetchBincomes = async () => {
+  const fetchBincomes = async (page = currentPage) => {
     setLoading(true);
-    setError("");
     try {
       const params = {
         page,
-        limit,
+        limit: LIMIT,
         ...(selectedCategory && { categoryId: selectedCategory }),
       };
-      const res = await axios.get(API_BASE, { params });
-      const { data, pagination } = res.data;
+      const response = await axios.get(API_BASE_URL, { params });
+      const { data, pagination } = response.data;
       setBincomes(data || []);
       if (pagination) {
-        setTotalPages(pagination.totalPages || 0);
+        setTotalPages(pagination.totalPages || 1);
+        setCurrentPage(pagination.currentPage || 1);
         setTotalItems(pagination.totalItems || 0);
       }
+      setError("");
     } catch (err) {
-      setError(err.response?.data?.message || "بارگیری داده‌ها ناکام ماند");
-      setBincomes([]);
+      setError("بارگیری داده‌ها ناکام ماند");
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchBincomes();
+    fetchBincomes(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, selectedCategory]);
+  }, [selectedCategory]);
 
-  // ─── Form callbacks ────────────────────────────────────────────────────
+  const handlePageChange = (newPage) => {
+    if (newPage < 1 || newPage > totalPages) return;
+    fetchBincomes(newPage);
+  };
+
+  const refreshAfterMutation = () => {
+    fetchBincomes(1);
+  };
+
+  const handleEdit = (bincome) => {
+    setEditingBincome(bincome);
+    setShowForm(true);
+  };
+
   const handleFormSuccess = () => {
+    refreshAfterMutation();
     setShowForm(false);
-    setEditingId(null);
-    setEditingData(null);
-    fetchBincomes(); // refresh list
+    setEditingBincome(null);
   };
 
   const handleFormCancel = () => {
     setShowForm(false);
-    setEditingId(null);
-    setEditingData(null);
+    setEditingBincome(null);
   };
 
-  const handleAddNew = () => {
-    setEditingId(null);
-    setEditingData(null);
-    setShowForm(true);
-  };
-
-  const handleEdit = (bincome) => {
-    setEditingId(bincome.id);
-    setEditingData(bincome);
-    setShowForm(true);
-  };
-
-  // ─── Delete ──────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     if (!window.confirm("آیا از حذف این رکورد مطمئن هستید؟")) return;
     setLoading(true);
     try {
-      await axios.delete(`${API_BASE}/${id}`);
-      fetchBincomes();
+      await axios.delete(`${API_BASE_URL}/${id}`);
+      refreshAfterMutation();
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
+  // ✅ Build initial entries for the form (edit mode)
+  const getInitialEntries = () => {
+    if (editingBincome) {
+      return [{
+        typeId: editingBincome.typeId || "",
+        categoryId: editingBincome.categoryId || "",
+        amount: editingBincome.amount ?? "",
+        weight: editingBincome.weight ?? "",
+        unitPrice: editingBincome.unitPrice ?? "",
+        total: editingBincome.totalPrice ?? "",
+        isAfn: !!editingBincome.isAfn,
+        DV: editingBincome.DV ?? 65,
+      }];
+    }
+    return [{
+      typeId: "",
+      categoryId: "",
+      amount: "",
+      weight: "",
+      unitPrice: "",
+      total: "",
+      isAfn: false,
+      DV: 65,
+    }];
+  };
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
   const getTotalPrice = (item) => {
     if (item.totalPrice !== undefined && item.totalPrice !== null) {
-      return item.totalPrice;
+      return parseFloat(item.totalPrice);
     }
     const amount = parseFloat(item.amount) || 0;
     const unitPrice = parseFloat(item.unitPrice) || 0;
@@ -123,15 +147,36 @@ const BincomeManager = () => {
 
   const grandTotal = bincomes.reduce((sum, item) => sum + getTotalPrice(item), 0);
 
-  // ─── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="bg-gradient-to-br from-gray-50 to-blue-50 p-6 rounded-xl shadow-lg border border-gray-100 mt-8">
+    <div className="bg-gradient-to-br from-gray-50 to-blue-50 p-6 space-y-8" dir="rtl">
       <div className="text-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">مدیریت ورودی کمپل (Bincome)</h2>
-        <p className="text-sm text-gray-500">ثبت و مدیریت درآمدهای کمپل</p>
+        <h1 className="text-3xl font-bold text-gray-800 mb-2">مدیریت ورودی کمپل (Bincome)</h1>
       </div>
 
-      {/* Error display */}
+      {/* Toggle Form Button */}
+      <div className="flex justify-center mb-6">
+        {!showForm ? (
+          <button
+            onClick={() => {
+              setEditingBincome(null);
+              setShowForm(true);
+            }}
+            className="px-6 py-3 bg-cyan-700 text-white rounded-xl hover:bg-cyan-800 transition font-medium shadow-md flex items-center gap-2"
+          >
+            <FaPlus />
+            افزودن رکورد جدید
+          </button>
+        ) : (
+          <button
+            onClick={handleFormCancel}
+            className="px-6 py-3 bg-gray-600 text-white rounded-xl transition font-medium shadow-md flex items-center gap-2"
+          >
+            <FaTimes />
+            بستن فرم
+          </button>
+        )}
+      </div>
+
       {error && (
         <div className="bg-red-50 border-r-4 border-red-500 text-red-700 p-4 rounded-lg shadow-sm mb-6">
           <div className="flex items-center gap-2">
@@ -141,46 +186,25 @@ const BincomeManager = () => {
         </div>
       )}
 
-      {/* ─── Toggle Form Button ────────────────────────────────────────── */}
-      <div className="flex justify-center mb-6">
-        {!showForm ? (
-          <button
-            onClick={handleAddNew}
-            className="px-6 py-3 bg-cyan-700 hover:bg-cyan-800 text-white rounded-xl transition font-medium shadow-md flex items-center gap-2"
-          >
-            <FaPlus />
-            افزودن رکورد جدید
-          </button>
-        ) : (
-          <button
-            onClick={handleFormCancel}
-            className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-xl transition font-medium shadow-md flex items-center gap-2"
-          >
-            <FaTimes />
-            بستن فرم
-          </button>
-        )}
-      </div>
-
-      {/* ─── Form ────────────────────────────────────────────────────────── */}
       {showForm && (
         <BincomeForm
-          editingId={editingId}
-          initialData={editingData}
+          key={editingBincome ? editingBincome.id : "new"}
           onSuccess={handleFormSuccess}
           onCancel={handleFormCancel}
+          editingId={editingBincome?.id || null}
+          initialEntries={getInitialEntries()}
         />
       )}
 
-      {/* ─── Filter Bar ────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-lg shadow mb-6">
+      {/* Filter Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-lg shadow">
         <div className="flex items-center gap-3">
           <label className="font-medium text-gray-700">دسته‌بندی:</label>
           <select
             value={selectedCategory}
             onChange={(e) => {
               setSelectedCategory(e.target.value);
-              setPage(1);
+              setCurrentPage(1);
             }}
             className="border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none"
           >
@@ -197,7 +221,7 @@ const BincomeManager = () => {
         </div>
       </div>
 
-      {/* ─── Table ──────────────────────────────────────────────────────── */}
+      {/* Bincome Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
         <div className="bg-cyan-700 text-white p-4">
           <div className="flex items-center justify-between">
@@ -233,7 +257,7 @@ const BincomeManager = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
               <p className="text-gray-500 text-lg">هیچ رکوردی یافت نشد</p>
-              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "افزودن رکورد جدید" کلیک کنید.</p>
+              <p className="text-gray-400 text-sm mt-1">برای شروع، روی دکمه "افزودن رکورد جدید" کلیک کنید</p>
             </div>
           </div>
         ) : (
@@ -248,37 +272,51 @@ const BincomeManager = () => {
                     <th className="p-3 border-b font-semibold">وزن</th>
                     <th className="p-3 border-b font-semibold">قیمت واحد</th>
                     <th className="p-3 border-b font-semibold">قیمت کل</th>
+                    {/* ✅ currency + DV columns */}
+                    <th className="p-3 border-b font-semibold">واحد</th>
+                    <th className="p-3 border-b font-semibold">نرخ دالر</th>
                     <th className="p-3 border-b font-semibold">تاریخ ایجاد</th>
                     <th className="p-3 border-b font-semibold">عملیات</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bincomes.map((item) => {
-                    const totalPrice = getTotalPrice(item);
+                  {bincomes.map((inc) => {
+                    const totalPrice = getTotalPrice(inc);
                     return (
-                      <tr key={item.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
-                        <td className="p-3 text-gray-600">{item.id}</td>
+                      <tr key={inc.id} className="hover:bg-gray-50 border-b last:border-0 transition-colors">
+                        <td className="p-3 text-gray-600">{inc.id}</td>
                         <td className="p-3">
-                          {categories.find((c) => c.id === item.categoryId)?.name || item.categoryId}
+                          {categories.find((c) => c.id === inc.categoryId)?.name || inc.categoryId}
                         </td>
-                        <td className="p-3">{item.amount}</td>
-                        <td className="p-3">{item.weight}</td>
-                        <td className="p-3">{item.unitPrice}</td>
+                        <td className="p-3">{inc.amount}</td>
+                        <td className="p-3">{inc.weight ?? "—"}</td>
+                        <td className="p-3">{inc.unitPrice}</td>
                         <td className="p-3 font-medium text-cyan-700">{totalPrice.toFixed(2)}</td>
+                        {/* ✅ currency badge */}
+                        <td className="p-3">
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                            inc.isAfn
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}>
+                            {symbolFor(inc.isAfn)} {currencyLabel(inc.isAfn)}
+                          </span>
+                        </td>
+                        <td className="p-3 text-gray-600">{inc.DV ?? "—"}</td>
                         <td className="p-3 text-sm text-gray-500">
-                          {new Date(item.createdAt).toLocaleDateString('fa-IR')}
+                          {new Date(inc.createdAt).toLocaleDateString('fa-IR')}
                         </td>
                         <td className="p-3">
                           <div className="flex items-center justify-center gap-2">
                             <button
-                              onClick={() => handleEdit(item)}
+                              onClick={() => handleEdit(inc)}
                               className="p-2 text-cyan-700 hover:bg-cyan-50 rounded-lg transition"
                               title="ویرایش"
                             >
                               <FaEdit />
                             </button>
                             <button
-                              onClick={() => handleDelete(item.id)}
+                              onClick={() => handleDelete(inc.id)}
                               className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
                               title="حذف"
                             >
@@ -289,7 +327,7 @@ const BincomeManager = () => {
                       </tr>
                     );
                   })}
-                  {/* ─── Footer row: Grand Total ───────────────────────── */}
+                  {/* Footer: Grand Total */}
                   <tr className="bg-cyan-50 border-t-2 border-cyan-200">
                     <td colSpan="5" className="p-3 font-bold text-right text-cyan-800">
                       مجموع کل قیمت:
@@ -297,20 +335,16 @@ const BincomeManager = () => {
                     <td className="p-3 font-bold text-cyan-800 text-lg">
                       {grandTotal.toFixed(2)}
                     </td>
-                    <td colSpan="2" />
+                    <td colSpan="4" />
                   </tr>
                 </tbody>
               </table>
             </div>
-
-            {/* ─── Pagination ────────────────────────────────────────────── */}
-            <div className="bg-gray-50 border-t border-gray-200">
-              <Pagination
-                currentPage={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-              />
-            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+            />
           </>
         )}
       </div>
