@@ -64,6 +64,18 @@ const Bill = sequelize.define(
       defaultValue: [],
       comment: "Array of blanket sell (BSales) IDs",
     },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      comment: "DV value",
+    },
+    isAfn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "Flag indicating whether the record is Afn",
+    },
   },
   {
     tableName: "Bill",

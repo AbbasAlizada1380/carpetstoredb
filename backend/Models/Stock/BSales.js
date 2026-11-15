@@ -46,6 +46,18 @@ const BSales = sequelize.define(
       references: { model: "bExists", key: "id" },
       comment: "Reference to blanket stock (bExist)",
     },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      comment: "DV value",
+    },
+    isAfn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: "Flag indicating whether the record is Afn",
+    },
   },
   {
     tableName: "bsales",

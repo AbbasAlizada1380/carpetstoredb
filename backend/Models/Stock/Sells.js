@@ -49,7 +49,19 @@ const Sells = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: { model: "Incomes", key: "id" },
-    }
+    },
+    DV: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 65.00,
+      comment: "DV value",
+    },
+    isAfn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      comment: "Flag indicating whether the record is Afn",
+    },
   },
   {
     timestamps: true,

@@ -15,19 +15,28 @@ const BUYER_API = `${BASE_URL}/buyer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 const BEXIST_API = `${BASE_URL}/bexist`;
 
+// ✅ currency helpers
+const CURRENCY_SYMBOL = { afn: "؋", usd: "$" };
+const symbolFor = (isAfn) => (isAfn ? CURRENCY_SYMBOL.afn : CURRENCY_SYMBOL.usd);
+
+const emptyEntry = (defaults = {}) => ({
+  typeId: "",
+  categoryId: "",
+  bexistId: "",
+  quantity: "",
+  unitPrice: "",
+  total: "",
+  // ✅ per-row currency
+  isAfn: defaults.isAfn ?? false,
+  DV: defaults.DV ?? 65,
+});
+
 const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  const [entries, setEntries] = useState(
-    initialEntries || [
-      {
-        typeId: "",
-        categoryId: "",
-        bexistId: "",
-        quantity: "",
-        unitPrice: "",
-        total: "",
-      },
-    ]
-  );
+  // ✅ global currency (applies to all rows unless overridden)
+  const [globalIsAfn, setGlobalIsAfn] = useState(false);
+  const [globalDV, setGlobalDV] = useState(65);
+
+  const [entries, setEntries] = useState(initialEntries || [emptyEntry()]);
 
   const [buyers, setBuyers] = useState([]);
   const [buyerMode, setBuyerMode] = useState("existing");
@@ -59,6 +68,17 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     fetchData();
   }, []);
 
+  // ✅ hydrate global currency from first entry when editing
+  useEffect(() => {
+    if (initialEntries && initialEntries.length > 0) {
+      const first = initialEntries[0];
+      if (first.isAfn !== undefined) setGlobalIsAfn(!!first.isAfn);
+      if (first.DV !== undefined && first.DV !== null) {
+        setGlobalDV(parseFloat(first.DV) || 65);
+      }
+    }
+  }, [initialEntries]);
+
   const fetchCategoriesForType = async (typeId) => {
     if (!typeId) return;
     if (categoriesMap[typeId]) return;
@@ -82,24 +102,38 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     }
   };
 
-  // ─── Compute total from quantity & unitPrice ──────────────────────────
   const computeTotal = (entry) => {
     const qty = parseFloat(entry.quantity) || 0;
     const price = parseFloat(entry.unitPrice) || 0;
     return (qty * price).toFixed(2);
   };
 
-  // ─── Compute unitPrice from total & quantity ──────────────────────────
-  const computeUnitPriceFromTotal = (entry) => {
-    const qty = parseFloat(entry.quantity) || 0;
-    const total = parseFloat(entry.total) || 0;
-    if (qty > 0) {
-      return (total / qty).toFixed(2);
-    }
-    return "";
+  // ✅ change currency for a single row
+  const handleRowCurrencyChange = (index, isAfn) => {
+    const newEntries = [...entries];
+    newEntries[index].isAfn = isAfn;
+    setEntries(newEntries);
   };
 
-  // ─── Handle entry field changes ──────────────────────────────────────
+  // ✅ change DV for a single row
+  const handleRowDVChange = (index, DV) => {
+    const newEntries = [...entries];
+    newEntries[index].DV = DV;
+    setEntries(newEntries);
+  };
+
+  // ✅ change currency for ALL rows
+  const applyGlobalCurrency = (isAfn) => {
+    setGlobalIsAfn(isAfn);
+    setEntries((prev) => prev.map((e) => ({ ...e, isAfn })));
+  };
+
+  // ✅ change DV for ALL rows
+  const applyGlobalDV = (DV) => {
+    setGlobalDV(DV);
+    setEntries((prev) => prev.map((e) => ({ ...e, DV })));
+  };
+
   const handleEntryChange = (index, field, value) => {
     const newEntries = [...entries];
     newEntries[index][field] = value;
@@ -125,51 +159,29 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       return;
     }
 
-    // ─── Handle total edit – recalc unitPrice ──────────────────────────
     if (field === "total") {
       const totalVal = parseFloat(value);
       if (!isNaN(totalVal) && totalVal >= 0) {
         const qty = parseFloat(newEntries[index].quantity) || 0;
         if (qty > 0) {
-          const newUnitPrice = (totalVal / qty).toFixed(2);
-          newEntries[index].unitPrice = newUnitPrice;
-        } else {
-          // Quantity is zero, cannot compute unitPrice; keep it empty.
-          // But we should not clear total.
+          newEntries[index].unitPrice = (totalVal / qty).toFixed(2);
         }
       }
-      // ✅ Do NOT recalc total again – preserve user input
       setEntries(newEntries);
       return;
     }
 
-    // ─── Handle quantity or unitPrice changes ──────────────────────────
     if (["quantity", "unitPrice"].includes(field)) {
-      // Recalculate total
       const qty = parseFloat(newEntries[index].quantity) || 0;
       const price = parseFloat(newEntries[index].unitPrice) || 0;
-      if (qty > 0 && price > 0) {
-        newEntries[index].total = (qty * price).toFixed(2);
-      } else {
-        newEntries[index].total = "";
-      }
+      newEntries[index].total = qty > 0 && price > 0 ? (qty * price).toFixed(2) : "";
     }
 
     setEntries(newEntries);
   };
 
   const addEntry = () => {
-    setEntries([
-      ...entries,
-      {
-        typeId: "",
-        categoryId: "",
-        bexistId: "",
-        quantity: "",
-        unitPrice: "",
-        total: "",
-      },
-    ]);
+    setEntries([...entries, emptyEntry({ isAfn: globalIsAfn, DV: globalDV })]);
   };
 
   const removeEntry = (index) => {
@@ -190,10 +202,13 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       return "قیمت واحد باید بزرگتر از صفر باشد";
     if (!entry.total || parseFloat(entry.total) <= 0)
       return "مبلغ کل باید بزرگتر از صفر باشد";
+    // ✅ DV must be positive
+    if (!entry.DV || parseFloat(entry.DV) <= 0)
+      return "نرخ دالر باید بزرگتر از صفر باشد";
     return null;
   };
 
-  const originalTotal = entries.reduce((sum, entry) => sum + (parseFloat(entry.total) || 0), 0);
+  const originalTotal = entries.reduce((sum, e) => sum + (parseFloat(e.total) || 0), 0);
   const discount = parseFloat(discountAmount) || 0;
   const totalAmount = Math.max(originalTotal - discount, 0);
   const receiptValue = parseFloat(totalReceipt) || 0;
@@ -208,6 +223,15 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         setError(`ردیف ${i + 1}: ${err}`);
         return;
       }
+    }
+
+    // ✅ single currency per bill
+    const currencySet = new Set(entries.map((en) => !!en.isAfn));
+    if (currencySet.size > 1) {
+      setError(
+        "همه ردیف‌ها باید یک واحد پول داشته باشند. لطفاً واحد پول را یکسان کنید یا فاکتور را جدا ثبت کنید."
+      );
+      return;
     }
 
     if (discount > originalTotal + 0.01) {
@@ -238,7 +262,7 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       mainPayload.newBuyer = newBuyerName.trim();
     }
 
-    // ─── Distribute receipt proportionally ──────────────────────────────
+    // Distribute receipt proportionally (unchanged math)
     const totalOriginal = originalTotal;
     const totalReceiptToDistribute = receiptValue;
 
@@ -247,12 +271,13 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       quantity: parseFloat(entry.quantity) || 0,
       unitPrice: parseFloat(entry.unitPrice) || 0,
       amount: parseFloat(entry.total) || 0,
+      isAfn: !!entry.isAfn,
+      DV: parseFloat(entry.DV) || 65,
     }));
 
-    let shares = baseEntries.map((entry) => {
-      if (totalOriginal === 0) return 0;
-      return (entry.amount / totalOriginal) * totalReceiptToDistribute;
-    });
+    let shares = baseEntries.map((entry) =>
+      totalOriginal === 0 ? 0 : (entry.amount / totalOriginal) * totalReceiptToDistribute
+    );
     shares = shares.map((s) => Math.round(s * 100) / 100);
     shares = shares.map((s, idx) => Math.min(s, baseEntries[idx].amount));
 
@@ -260,8 +285,7 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     let diff = Math.round((totalReceiptToDistribute - sumShares) * 100) / 100;
     if (Math.abs(diff) > 0.001 && shares.length > 0) {
       const lastIdx = shares.length - 1;
-      let newShare = shares[lastIdx] + diff;
-      newShare = Math.min(newShare, baseEntries[lastIdx].amount);
+      let newShare = Math.min(shares[lastIdx] + diff, baseEntries[lastIdx].amount);
       newShare = Math.max(newShare, 0);
       shares[lastIdx] = newShare;
     }
@@ -276,11 +300,17 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         amount: entry.amount,
         receipt: Math.round(receipt * 100) / 100,
         remaind: Math.round(remaind * 100) / 100,
+        // ✅ currency per row
+        isAfn: entry.isAfn,
+        DV: entry.DV,
       };
     });
 
     mainPayload.bsales = bsalesArray;
     mainPayload.discount_amount = discount;
+    // ✅ global currency for the bill
+    mainPayload.isAfn = !!globalIsAfn;
+    mainPayload.DV = parseFloat(globalDV) || 65;
 
     setSubmitLoading(true);
     setError("");
@@ -294,21 +324,14 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
       onSuccess();
       if (!editingId) {
-        setEntries([
-          {
-            typeId: "",
-            categoryId: "",
-            bexistId: "",
-            quantity: "",
-            unitPrice: "",
-            total: "",
-          },
-        ]);
+        setEntries([emptyEntry()]);
         setBuyerMode("existing");
         setSelectedBuyerId("");
         setNewBuyerName("");
         setTotalReceipt("");
         setDiscountAmount("");
+        setGlobalIsAfn(false);
+        setGlobalDV(65);
       } else {
         onCancel();
       }
@@ -389,7 +412,45 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         )}
       </div>
 
-      {/* Table */}
+      {/* ✅ Global currency controls */}
+      <div className="mb-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">واحد پول پیش‌فرض:</span>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={globalIsAfn === false}
+                onChange={() => applyGlobalCurrency(false)}
+              />
+              دالر ($)
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={globalIsAfn === true}
+                onChange={() => applyGlobalCurrency(true)}
+              />
+              افغانی (؋)
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">نرخ دالر (DV):</span>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={globalDV}
+              onChange={(e) => applyGlobalDV(e.target.value)}
+              className="w-28 border rounded-lg px-2 py-1 text-sm"
+            />
+          </div>
+          <span className="text-xs text-gray-500">
+            (این مقدار به همه ردیف‌ها اعمال می‌شود؛ هر ردیف می‌تواند جداگانه تغییر کند)
+          </span>
+        </div>
+      </div>
+
       <form onSubmit={handleSubmit}>
         <div className="overflow-x-auto mb-4">
           <table className="w-full text-sm border-collapse">
@@ -401,6 +462,9 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">موجودی (بلنکت) *</th>
                 <th className="p-2 border">تعداد *</th>
                 <th className="p-2 border">قیمت واحد *</th>
+                {/* ✅ per-row currency + DV */}
+                <th className="p-2 border">واحد</th>
+                <th className="p-2 border">DV</th>
                 <th className="p-2 border">جمع (قابل ویرایش) *</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
@@ -476,6 +540,29 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       required
                     />
                   </td>
+                  {/* ✅ per-row currency */}
+                  <td className="p-2">
+                    <select
+                      value={entry.isAfn ? "afn" : "usd"}
+                      onChange={(e) => handleRowCurrencyChange(idx, e.target.value === "afn")}
+                      className="w-20 border rounded px-1 py-1"
+                    >
+                      <option value="usd">$ دالر</option>
+                      <option value="afn">؋ افغانی</option>
+                    </select>
+                  </td>
+                  {/* ✅ per-row DV */}
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={entry.DV}
+                      onChange={(e) => handleRowDVChange(idx, e.target.value)}
+                      className="w-20 border rounded px-1 py-1"
+                      required
+                    />
+                  </td>
                   <td className="p-2">
                     <input
                       type="number"
@@ -485,6 +572,9 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       className="w-24 border rounded px-1 py-1"
                       required
                     />
+                    <div className="text-xs text-gray-500 mt-1">
+                      {symbolFor(entry.isAfn)}
+                    </div>
                   </td>
                   <td className="p-2 text-center">
                     <button
@@ -511,11 +601,7 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
           </button>
           <div className="flex gap-3">
             {onCancel && (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="px-5 py-2 border rounded-lg"
-              >
+              <button type="button" onClick={onCancel} className="px-5 py-2 border rounded-lg">
                 انصراف
               </button>
             )}
@@ -539,32 +625,13 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
         {/* Financial summary */}
         <div className="mt-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {/* <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل (قبل از تخفیف)</label>
-              <div className="text-xl font-bold text-gray-600">{originalTotal.toFixed(2)} افغانی</div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">تخفیف (مبلغ)</label>
-              <input
-                type="number"
-                step="any"
-                value={discountAmount}
-                onChange={(e) => setDiscountAmount(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-lg"
-                placeholder="مبلغ تخفیف"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
+              <div className="text-2xl font-bold text-indigo-700">
+                {totalAmount.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل پس از تخفیف</label>
-              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)} افغانی</div>
-            </div> */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
-              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)} افغانی</div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
               <input
@@ -575,6 +642,12 @@ const BSaleForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 className="w-full border rounded-lg px-3 py-2 text-lg"
                 placeholder="مبلغ دریافت شده"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
+              <div className="text-2xl font-bold text-red-600">
+                {totalRemaind.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
           </div>
         </div>

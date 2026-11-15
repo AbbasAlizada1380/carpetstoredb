@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Buyer from "./Buyer";                   // your existing buyer manager
 import BuyerAccountManager from "./BuyerAccountManager";
-import ReceiptManager from "./Receipt";
+import ReceiptManager from "../finance/ReceiptManager.jsx";
 
 const BuyerManagement = () => {
   const [activeTab, setActiveTab] = useState("buyer");
@@ -54,7 +54,7 @@ const BuyerManagement = () => {
             </button>
 
             {/* Buyer Account Tab */}
-            <button
+            {/* <button
               className={`group flex-1 sm:flex-none flex items-center justify-center gap-3 px-5 py-3.5 rounded-xl font-medium transition-all duration-300 ${
                 activeTab === "account"
                   ? "bg-gradient-to-r from-cyan-600 to-cyan-500 text-white shadow-lg shadow-cyan-100"
@@ -68,7 +68,7 @@ const BuyerManagement = () => {
                 </svg>
               </div>
               <span className="text-sm md:text-base">حساب خریدار</span>
-            </button>
+            </button> */}
 
             {/* Receipts Tab */}
             <button
@@ -100,11 +100,11 @@ const BuyerManagement = () => {
                 <Buyer />
               </div>
             )}
-            {activeTab === "account" && (
+            {/* {activeTab === "account" && (
               <div className="animate-fadeIn">
                 <BuyerAccountManager />
               </div>
-            )}
+            )} */}
             {activeTab === "receipts" && (
               <div className="animate-fadeIn">
                 <ReceiptManager />

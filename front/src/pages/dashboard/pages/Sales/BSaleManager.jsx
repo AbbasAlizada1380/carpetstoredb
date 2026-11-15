@@ -8,6 +8,10 @@ import BSaleForm from "./BSaleForm";
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const BSALES_API = `${BASE_URL}/bsales`;
 
+// ✅ currency helpers
+const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
+const currencyLabel = (isAfn) => (isAfn ? "افغانی" : "دالر");
+
 const BSaleManager = () => {
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -16,13 +20,11 @@ const BSaleManager = () => {
   const [editingId, setEditingId] = useState(null);
   const [editingData, setEditingData] = useState(null);
 
-  // Pagination
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
-  // ─── Fetch blanket sales ──────────────────────────────────────────────
   const fetchSales = async (currentPage = page, itemsPerPage = limit) => {
     setLoading(true);
     setError("");
@@ -47,7 +49,6 @@ const BSaleManager = () => {
     fetchSales(page, limit);
   }, [page, limit]);
 
-  // ─── Form callbacks ────────────────────────────────────────────────────
   const handleFormSuccess = () => {
     setShowForm(false);
     setEditingId(null);
@@ -69,7 +70,6 @@ const BSaleManager = () => {
 
   const handleEdit = (sale) => {
     setEditingId(sale.id);
-    // Convert single sale to entries format for form
     setEditingData([
       {
         typeId: sale.category?.typeId || "",
@@ -78,12 +78,14 @@ const BSaleManager = () => {
         quantity: sale.quantity,
         unitPrice: sale.unit_price,
         total: sale.total,
+        // ✅ include currency
+        isAfn: !!sale.isAfn,
+        DV: sale.DV ?? 65,
       },
     ]);
     setShowForm(true);
   };
 
-  // ─── Delete ──────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     if (!window.confirm("آیا از حذف این رکورد مطمئن هستید؟")) return;
     setLoading(true);
@@ -101,11 +103,8 @@ const BSaleManager = () => {
     }
   };
 
-  // ─── Pagination ──────────────────────────────────────────────────────────
   const handlePageChange = (newPage) => {
-    if (newPage >= 1 && newPage <= totalPages) {
-      setPage(newPage);
-    }
+    if (newPage >= 1 && newPage <= totalPages) setPage(newPage);
   };
 
   return (
@@ -124,7 +123,6 @@ const BSaleManager = () => {
         </div>
       )}
 
-      {/* Toggle Form Button */}
       <div className="flex justify-center mb-6">
         {!showForm ? (
           <button
@@ -154,7 +152,6 @@ const BSaleManager = () => {
         />
       )}
 
-      {/* Table */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
         <div className="bg-indigo-700 text-white p-4">
           <div className="flex items-center justify-between">
@@ -204,6 +201,9 @@ const BSaleManager = () => {
                     <th className="p-3 border-b font-semibold">موجودی</th>
                     <th className="p-3 border-b font-semibold">تعداد</th>
                     <th className="p-3 border-b font-semibold">قیمت واحد</th>
+                    {/* ✅ currency + DV columns */}
+                    <th className="p-3 border-b font-semibold">واحد</th>
+                    <th className="p-3 border-b font-semibold">نرخ دالر</th>
                     <th className="p-3 border-b font-semibold">جمع کل</th>
                     <th className="p-3 border-b font-semibold">دریافتی</th>
                     <th className="p-3 border-b font-semibold">باقیمانده</th>
@@ -219,9 +219,20 @@ const BSaleManager = () => {
                       <td className="p-3">{item.bExist?.id || item.bexistId}</td>
                       <td className="p-3">{item.quantity}</td>
                       <td className="p-3">{item.unit_price}</td>
-                      <td className="p-3 font-bold text-indigo-700">{item.total}</td>
-                      <td className="p-3">{item.receipt}</td>
-                      <td className="p-3">{item.remaind}</td>
+                      {/* ✅ currency badge */}
+                      <td className="p-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                          item.isAfn ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {symbolFor(item.isAfn)} {currencyLabel(item.isAfn)}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-600">{item.DV ?? "—"}</td>
+                      <td className="p-3 font-bold text-indigo-700">
+                        {item.total} {symbolFor(item.isAfn)}
+                      </td>
+                      <td className="p-3">{item.receipt} {symbolFor(item.isAfn)}</td>
+                      <td className="p-3">{item.remaind} {symbolFor(item.isAfn)}</td>
                       <td className="p-3">{item.buyer?.fullname || "—"}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-2">

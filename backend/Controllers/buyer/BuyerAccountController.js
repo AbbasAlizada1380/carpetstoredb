@@ -1,8 +1,7 @@
 // Controllers/accounting/BuyerAccountController.js
-import { BuyerAccount, Buyer } from "../../Models/index.js";
+import { BuyerAccount, Buyer, Bill } from "../../Models/index.js";
 import { Op } from "sequelize";
 import sequelize from "../../dbconnection.js";
-import { Bill } from "../../Models/index.js"; // ensure Bill is imported
 
 /* ===========================
    Get or create buyer account
@@ -25,7 +24,9 @@ export const getOrCreateBuyerAccount = async (req, res) => {
         buyerId,
         sellIds: [],
         remaindIds: [],
+        receiptSaleIds: [],
         receiptIds: [],
+        has_remaindIds: false,
       });
     }
 
@@ -69,11 +70,13 @@ export const addSellToAccount = async (req, res) => {
         buyerId,
         sellIds: [],
         remaindIds: [],
+        receiptSaleIds: [],
         receiptIds: [],
+        has_remaindIds: false,
       });
     }
 
-    const currentSells = account.sellIds;
+    const currentSells = Array.isArray(account.sellIds) ? [...account.sellIds] : [];
     if (!currentSells.includes(sellId)) {
       currentSells.push(sellId);
       await account.update({ sellIds: currentSells });
@@ -103,11 +106,13 @@ export const addReceiptToAccount = async (req, res) => {
         buyerId,
         sellIds: [],
         remaindIds: [],
+        receiptSaleIds: [],
         receiptIds: [],
+        has_remaindIds: false,
       });
     }
 
-    const currentReceipts = account.receiptIds;
+    const currentReceipts = Array.isArray(account.receiptIds) ? [...account.receiptIds] : [];
     if (!currentReceipts.includes(receiptId)) {
       currentReceipts.push(receiptId);
       await account.update({ receiptIds: currentReceipts });
@@ -136,7 +141,7 @@ export const removeSellFromAccount = async (req, res) => {
       return res.status(404).json({ message: "Account not found" });
     }
 
-    let currentSells = account.sellIds;
+    const currentSells = Array.isArray(account.sellIds) ? [...account.sellIds] : [];
     const index = currentSells.indexOf(sellId);
     if (index !== -1) {
       currentSells.splice(index, 1);
@@ -166,7 +171,7 @@ export const removeReceiptFromAccount = async (req, res) => {
       return res.status(404).json({ message: "Account not found" });
     }
 
-    let currentReceipts = account.receiptIds;
+    const currentReceipts = Array.isArray(account.receiptIds) ? [...account.receiptIds] : [];
     const index = currentReceipts.indexOf(receiptId);
     if (index !== -1) {
       currentReceipts.splice(index, 1);
@@ -180,61 +185,141 @@ export const removeReceiptFromAccount = async (req, res) => {
   }
 };
 
-// Controllers/accounting/BuyerAccountController.js (add at the end)
-
-
 /* ===========================
    Get all buyers with unpaid bills (has_remaindIds = true)
-   Returns format: { success: true, data: [...], total: overallDue }
+   ✅ NEW: grouped per currency (AFN / USD), mirroring getCustomersWithUnpaid
 =========================== */
 export const getBuyersWithUnpaid = async (req, res) => {
   try {
-    // Find all BuyerAccounts where has_remaindIds is true
     const accounts = await BuyerAccount.findAll({
       where: { has_remaindIds: true },
       include: [{ model: Buyer, as: "buyer" }],
     });
 
-    const result = [];
-    let totalOverallDue = 0;
-
-    for (const account of accounts) {
-      const remaindIds = account.remaindIds || [];
-      if (remaindIds.length === 0) continue; // safety
-
-      // Fetch all bills whose IDs are in remaindIds
-      const bills = await Bill.findAll({
-        where: { id: remaindIds },
-        attributes: ['id', 'remainingAmount'],
-      });
-
-      let totalDue = 0;
-      const details = [];
-      for (const bill of bills) {
-        const remaining = parseFloat(bill.remainingAmount) || 0;
-        totalDue += remaining;
-        details.push({ billId: bill.id, remaining });
-      }
-
-      totalOverallDue += totalDue;
-
-      result.push({
-        customer: {   // naming matches frontend expectation (customer)
-          id: account.buyer.id,
-          fullname: account.buyer.fullname,
-        },
-        total_due: totalDue,
-        details,
+    if (!accounts.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: { afn: 0, usd: 0 },
       });
     }
 
-    res.json({
+    // Collect all unpaid bill IDs across buyers
+    const allBillIds = [];
+    for (const account of accounts) {
+      const remaindIds = Array.isArray(account.remaindIds) ? account.remaindIds : [];
+      allBillIds.push(...remaindIds);
+    }
+
+    if (allBillIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: { afn: 0, usd: 0 },
+      });
+    }
+
+    // ✅ Include isAfn + DV to group per currency
+    const unpaidBills = await Bill.findAll({
+      where: {
+        id: allBillIds,
+        remainingAmount: { [Op.gt]: 0 },
+      },
+      attributes: [
+        "id",
+        "buyerId",
+        "remainingAmount",
+        "totalAmount",
+        "paidAmount",
+        "isAfn",
+        "DV",
+      ],
+    });
+
+    // Structure: Map<buyerId, { afn: { total_due, bills[], DV }, usd: {...} }>
+    const buyerMap = new Map();
+
+    for (const bill of unpaidBills) {
+      const buyerId = bill.buyerId;
+      const amount = parseFloat(bill.remainingAmount) || 0;
+      const isAfn = !!bill.isAfn;
+      const bucketKey = isAfn ? "afn" : "usd";
+
+      if (!buyerMap.has(buyerId)) {
+        buyerMap.set(buyerId, {
+          afn: { total_due: 0, bills: [], DV: null },
+          usd: { total_due: 0, bills: [], DV: null },
+        });
+      }
+
+      const entry = buyerMap.get(buyerId)[bucketKey];
+      entry.total_due += amount;
+      entry.bills.push({
+        billId: bill.id,
+        remaining: amount,
+        DV: bill.DV != null ? parseFloat(bill.DV) : null,
+      });
+
+      // Track DV for this currency bucket; mark "mixed" if bills disagree
+      const billDV = bill.DV != null ? parseFloat(bill.DV) : null;
+      if (billDV != null) {
+        if (entry.DV === null) entry.DV = billDV;
+        else if (entry.DV !== billDV) entry.DV = "mixed";
+      }
+    }
+
+    // Fetch buyer names in one query
+    const buyerIds = Array.from(buyerMap.keys());
+    const buyers = await Buyer.findAll({
+      where: { id: buyerIds },
+      attributes: ["id", "fullname"],
+    });
+
+    const buyerById = new Map(buyers.map((b) => [b.id, b]));
+
+    // ✅ Build response: one row per (buyer, currency) with debt
+    const responseData = [];
+    const grandTotal = { afn: 0, usd: 0 };
+
+    for (const buyerId of buyerIds) {
+      const buyer = buyerById.get(buyerId);
+      if (!buyer) continue;
+
+      const buckets = buyerMap.get(buyerId);
+      for (const currency of ["usd", "afn"]) {
+        const bucket = buckets[currency];
+        if (bucket.total_due <= 0) continue;
+
+        responseData.push({
+          customer: {
+            // keep "customer" key so frontend expects the same shape as /customer-account
+            id: buyer.id,
+            fullname: buyer.fullname,
+          },
+          total_due: Number(bucket.total_due.toFixed(2)),
+          isAfn: currency === "afn",
+          DV: bucket.DV, // number, null, or "mixed"
+          details: bucket.bills,
+        });
+
+        grandTotal[currency] += bucket.total_due;
+      }
+    }
+
+    return res.status(200).json({
       success: true,
-      data: result,
-      total: totalOverallDue,
+      data: responseData,
+      total: {
+        afn: Number(grandTotal.afn.toFixed(2)),
+        usd: Number(grandTotal.usd.toFixed(2)),
+      },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error fetching buyers with unpaid", error: error.message });
+    console.error("Error fetching buyers with unpaid:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching buyers with unpaid",
+      error: error.message,
+    });
   }
 };

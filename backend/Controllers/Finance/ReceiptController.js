@@ -1,3 +1,4 @@
+// Controllers/Finance/ReceiptController.js
 import { Op } from "sequelize";
 import { sequelize } from "../../Models/index.js";
 import { Buyer, BuyerAccount, Receipt, Bill } from "../../Models/index.js";
@@ -7,18 +8,59 @@ const validateAmount = (amount) => {
   if (isNaN(amt) || amt <= 0) throw new Error("Amount must be a positive number");
 };
 
+// ─── NEW: currency helpers (mirrors PayController) ───────────────────────
+const resolveCurrencyFields = (source, fallback = {}) => {
+  let isAfn;
+  if (source?.isAfn !== undefined) {
+    const v = source.isAfn;
+    if (typeof v === "boolean") isAfn = v;
+    else if (v === 1 || v === "1" || v === "true") isAfn = true;
+    else if (v === 0 || v === "0" || v === "false") isAfn = false;
+    else throw new Error(`Invalid isAfn value: ${v}`);
+  } else {
+    isAfn = fallback.isAfn ?? false;
+  }
+
+  let DV;
+  if (source?.DV !== undefined && source.DV !== null && source.DV !== "") {
+    DV = parseFloat(source.DV);
+    if (!Number.isFinite(DV) || DV <= 0) {
+      throw new Error(`Invalid DV value: ${source.DV} (must be a positive number)`);
+    }
+  } else {
+    DV = fallback.DV ?? 65;
+  }
+
+  return { isAfn, DV };
+};
+
+// Convert an amount between AFN and USD (identity if same currency)
+const convertAmount = (amount, fromIsAfn, toIsAfn, DV) => {
+  if (fromIsAfn === toIsAfn) return amount;
+  const rate = Number(DV);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error("Cannot convert currency: invalid DV");
+  }
+  return fromIsAfn && !toIsAfn ? amount / rate : amount * rate;
+};
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
 // Helper: add receipt ID to BuyerAccount.receiptIds
 const addReceiptToBuyerAccount = async (buyerId, receiptId, transaction) => {
   let account = await BuyerAccount.findOne({ where: { buyerId }, transaction });
   if (!account) {
-    account = await BuyerAccount.create({
-      buyerId,
-      sellIds: [],
-      remaindIds: [],
-      receiptSaleIds: [],
-      receiptIds: [],
-      has_remaindIds: false,
-    }, { transaction });
+    account = await BuyerAccount.create(
+      {
+        buyerId,
+        sellIds: [],
+        remaindIds: [],
+        receiptSaleIds: [],
+        receiptIds: [],
+        has_remaindIds: false,
+      },
+      { transaction }
+    );
   }
   let receiptIds = Array.isArray(account.receiptIds) ? account.receiptIds : [];
   if (!receiptIds.includes(receiptId)) {
@@ -30,10 +72,9 @@ const addReceiptToBuyerAccount = async (buyerId, receiptId, transaction) => {
 
 // Helper: sync BuyerAccount remaindIds and receiptSaleIds based on current bill statuses
 const syncBuyerAccountBills = async (buyerId, transaction) => {
-  // Get all bills for this buyer
   const allBills = await Bill.findAll({
     where: { buyerId },
-    attributes: ['id', 'remainingAmount'],
+    attributes: ["id", "remainingAmount"],
     transaction,
   });
 
@@ -41,83 +82,175 @@ const syncBuyerAccountBills = async (buyerId, transaction) => {
   const receiptSaleIds = [];
   for (const bill of allBills) {
     const remaining = parseFloat(bill.remainingAmount);
-    if (remaining > 0) {
-      remaindIds.push(bill.id);
-    } else {
-      receiptSaleIds.push(bill.id);
-    }
+    if (remaining > 0) remaindIds.push(bill.id);
+    else receiptSaleIds.push(bill.id);
   }
-
-  const has_remaindIds = remaindIds.length > 0;
 
   await BuyerAccount.update(
     {
       remaindIds,
       receiptSaleIds,
-      has_remaindIds,
+      has_remaindIds: remaindIds.length > 0,
     },
     { where: { buyerId }, transaction }
   );
 };
 
-// CREATE a new receipt (payment from buyer)
+// ───────────────────────── CREATE ─────────────────────────
+
 export const createReceipt = async (req, res) => {
   try {
     const { buyerId, amountofmoney, description } = req.body;
 
     if (!buyerId) return res.status(400).json({ message: "buyerId is required" });
-    try { validateAmount(amountofmoney); } catch (err) { return res.status(400).json({ message: err.message }); }
+    try {
+      validateAmount(amountofmoney);
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    // ✅ NEW: currency for this receipt
+    let currency;
+    try {
+      currency = resolveCurrencyFields(req.body, { isAfn: false, DV: 65 });
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
 
     const buyer = await Buyer.findByPk(buyerId);
     if (!buyer) return res.status(404).json({ message: "Buyer not found" });
 
     const paymentAmount = parseFloat(amountofmoney);
+
     const unpaidBills = await Bill.findAll({
       where: { buyerId, remainingAmount: { [Op.gt]: 0 } },
       order: [["createdAt", "ASC"]],
     });
 
-    const totalUnpaid = unpaidBills.reduce((sum, b) => sum + parseFloat(b.remainingAmount), 0);
-    if (paymentAmount > totalUnpaid + 0.01) {
-      return res.status(400).json({ message: "Payment exceeds total unpaid amount" });
+    if (unpaidBills.length === 0) {
+      return res.status(400).json({ message: "Buyer has no unpaid bills" });
+    }
+
+    // ✅ NEW: same-currency first, then other-currency (age within each group)
+    const sameCurrencyBills = unpaidBills.filter((b) => !!b.isAfn === currency.isAfn);
+    const otherCurrencyBills = unpaidBills.filter((b) => !!b.isAfn !== currency.isAfn);
+    const orderedBills = [...sameCurrencyBills, ...otherCurrencyBills];
+
+    // ✅ NEW: total unpaid converted into the receipt's currency
+    const totalUnpaidConverted = orderedBills.reduce((sum, bill) => {
+      const remaining = parseFloat(bill.remainingAmount) || 0;
+      const billIsAfn = !!bill.isAfn;
+      const rate = parseFloat(bill.DV) > 0 ? parseFloat(bill.DV) : currency.DV;
+      return sum + convertAmount(remaining, billIsAfn, currency.isAfn, rate);
+    }, 0);
+
+    if (paymentAmount > totalUnpaidConverted + 0.01) {
+      return res.status(400).json({
+        message:
+          `Payment amount (${paymentAmount} ${currency.isAfn ? "AFN" : "USD"}) ` +
+          `exceeds total unpaid converted to ${currency.isAfn ? "AFN" : "USD"} ` +
+          `(${round2(totalUnpaidConverted).toFixed(2)}).`,
+      });
     }
 
     const transaction = await sequelize.transaction();
 
     try {
-      const receipt = await Receipt.create({
-        buyerId,
-        amountofmoney: paymentAmount,
-        description: description?.trim() || null,
-      }, { transaction });
+      // 1. Create the Receipt (with currency)
+      const receipt = await Receipt.create(
+        {
+          buyerId,
+          amountofmoney: paymentAmount,
+          description: description?.trim() || null,
+          isAfn: currency.isAfn,
+          DV: currency.DV,
+          appliedTo: [], // audit trail — populated below (only if column exists)
+        },
+        { transaction }
+      );
 
-      let remainingPayment = paymentAmount;
+      let remainingPayment = paymentAmount; // always in RECEIPT currency
       const fullyPaidBillIds = [];
+      const appliedTo = [];
 
-      for (const bill of unpaidBills) {
-        if (remainingPayment <= 0) break;
-        const currentRemaining = parseFloat(bill.remainingAmount);
-        const amountToPay = Math.min(remainingPayment, currentRemaining);
-        const newPaidAmount = parseFloat(bill.paidAmount) + amountToPay;
-        const newRemaining = currentRemaining - amountToPay;
+      // 2. Apply payment across bills
+      for (const bill of orderedBills) {
+        if (remainingPayment <= 0.009) break;
+
+        const billIsAfn = !!bill.isAfn;
+        const sameCurrency = billIsAfn === currency.isAfn;
+        const rate = parseFloat(bill.DV) > 0 ? parseFloat(bill.DV) : currency.DV;
+
+        const currentRemaining = parseFloat(bill.remainingAmount) || 0;
+        if (currentRemaining <= 0) continue;
+
+        // Available payment in the bill's currency
+        const availableInBillCurrency = convertAmount(
+          remainingPayment,
+          currency.isAfn,
+          billIsAfn,
+          rate
+        );
+
+        const amountToPayInBillCurrency = round2(
+          Math.min(availableInBillCurrency, currentRemaining)
+        );
+        if (amountToPayInBillCurrency <= 0) continue;
+
+        // Amount consumed from the payment, in the receipt's currency
+        const consumedInPaymentCurrency = round2(
+          convertAmount(amountToPayInBillCurrency, billIsAfn, currency.isAfn, rate)
+        );
+
+        const newPaidAmount = round2(
+          parseFloat(bill.paidAmount) + amountToPayInBillCurrency
+        );
+        const newRemaining = round2(currentRemaining - amountToPayInBillCurrency);
         let newStatus = bill.status;
-        if (newRemaining === 0) {
+        if (newRemaining <= 0) {
           newStatus = "paid";
           fullyPaidBillIds.push(bill.id);
-        } else if (newPaidAmount > 0 && newRemaining > 0) newStatus = "partial";
+        } else if (newPaidAmount > 0 && newRemaining > 0) {
+          newStatus = "partial";
+        }
 
-        await bill.update({
-          paidAmount: newPaidAmount,
-          remainingAmount: newRemaining,
-          status: newStatus,
-        }, { transaction });
-        remainingPayment -= amountToPay;
+        await bill.update(
+          {
+            paidAmount: newPaidAmount,
+            remainingAmount: Math.max(newRemaining, 0),
+            status: newStatus,
+          },
+          { transaction }
+        );
+
+        appliedTo.push({
+          billId: bill.id,
+          billCurrency: billIsAfn ? "AFN" : "USD",
+          paymentCurrency: currency.isAfn ? "AFN" : "USD",
+          appliedInBillCurrency: amountToPayInBillCurrency,
+          consumedInPaymentCurrency,
+          rate: sameCurrency ? 1 : rate,
+          converted: !sameCurrency,
+        });
+
+        remainingPayment = round2(remainingPayment - consumedInPaymentCurrency);
       }
 
-      // Add receipt ID to BuyerAccount.receiptIds
-      await addReceiptToBuyerAccount(buyerId, receipt.id, transaction);
+      // Surface rounding residue for the audit
+      if (remainingPayment > 0.009) {
+        appliedTo.push({
+          type: "unapplied_residue",
+          paymentCurrency: currency.isAfn ? "AFN" : "USD",
+          amount: remainingPayment,
+          reason: "Rounding residue — could not be applied to any bill",
+        });
+      }
 
-      // Sync remaindIds and receiptSaleIds based on updated bill statuses
+      // 3. Persist audit trail (requires Receipt.appliedTo JSON column — remove if absent)
+      await receipt.update({ appliedTo }, { transaction });
+
+      // 4. BuyerAccount updates
+      await addReceiptToBuyerAccount(buyerId, receipt.id, transaction);
       await syncBuyerAccountBills(buyerId, transaction);
 
       await transaction.commit();
@@ -125,7 +258,7 @@ export const createReceipt = async (req, res) => {
       res.status(201).json({
         message: "Receipt created successfully",
         receipt,
-        updatedBills: { fullyPaid: fullyPaidBillIds },
+        updatedBills: { fullyPaid: fullyPaidBillIds, appliedTo },
       });
     } catch (err) {
       await transaction.rollback();
@@ -136,7 +269,9 @@ export const createReceipt = async (req, res) => {
     res.status(500).json({ message: "Error creating receipt", error: error.message });
   }
 };
-// GET all receipts (with pagination)
+
+// ───────────────────────── READ ─────────────────────────
+
 export const getAllReceipts = async (req, res) => {
   try {
     const { buyerId, page = 1, limit = 20 } = req.query;
@@ -165,103 +300,6 @@ export const getAllReceipts = async (req, res) => {
   }
 };
 
-export const updateReceipt = async (req, res) => {
-  const { id } = req.params;
-  const { amountofmoney, description, buyerId } = req.body;
-
-  try {
-    const receipt = await Receipt.findByPk(id);
-    if (!receipt) return res.status(404).json({ message: "Receipt not found" });
-
-    // Validate amount if provided
-    if (amountofmoney !== undefined) {
-      try {
-        validateAmount(amountofmoney);
-      } catch (err) {
-        return res.status(400).json({ message: err.message });
-      }
-    }
-
-    // Validate buyer if provided
-    if (buyerId !== undefined) {
-      const buyer = await Buyer.findByPk(buyerId);
-      if (!buyer) {
-        return res.status(400).json({ message: "Buyer not found" });
-      }
-    }
-
-    // Build the update payload with only the fields that were sent
-    const updateData = {};
-    if (amountofmoney !== undefined) {
-      updateData.amountofmoney = parseFloat(amountofmoney);
-    }
-    if (description !== undefined) {
-      updateData.description = description?.trim() || null;
-    }
-    if (buyerId !== undefined) {
-      updateData.buyerId = buyerId;
-    }
-
-    // Nothing to update
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({ message: "No fields provided for update" });
-    }
-
-    await receipt.update(updateData);
-
-    res.json({ message: "Receipt updated successfully", receipt });
-  } catch (error) {
-    res.status(500).json({ message: "Error updating receipt", error: error.message });
-  }
-};
-
-// DELETE a receipt (reverse payment from bills)
-export const deleteReceipt = async (req, res) => {
-  const { id } = req.params;
-
-  const transaction = await sequelize.transaction();
-  try {
-    const receipt = await Receipt.findByPk(id);
-    if (!receipt) return res.status(404).json({ message: "Receipt not found" });
-
-    const { buyerId, amountofmoney } = receipt;
-    const bills = await Bill.findAll({
-      where: { buyerId },
-      order: [["createdAt", "DESC"]], // reverse order: apply refund to latest paid bills first
-      transaction,
-    });
-
-    let remainingRefund = parseFloat(amountofmoney);
-    for (const bill of bills) {
-      if (remainingRefund <= 0) break;
-      const currentPaid = parseFloat(bill.paidAmount);
-      if (currentPaid === 0) continue;
-      const amountToRefund = Math.min(remainingRefund, currentPaid);
-      const newPaidAmount = currentPaid - amountToRefund;
-      const newRemaining = parseFloat(bill.remainingAmount) + amountToRefund;
-      let newStatus = bill.status;
-      if (newRemaining > 0 && newPaidAmount === 0) newStatus = "unpaid";
-      else if (newPaidAmount > 0 && newRemaining > 0) newStatus = "partial";
-
-      await bill.update({
-        paidAmount: newPaidAmount,
-        remainingAmount: newRemaining,
-        status: newStatus,
-      }, { transaction });
-      remainingRefund -= amountToRefund;
-    }
-
-    await receipt.destroy({ transaction });
-    await syncBuyerAccountBills(buyerId, transaction);
-    await transaction.commit();
-
-    res.json({ message: "Receipt deleted and payments reversed" });
-  } catch (error) {
-    await transaction.rollback();
-    res.status(500).json({ message: "Error deleting receipt", error: error.message });
-  }
-};
-
 export const getReceiptsByBuyer = async (req, res) => {
   const { buyerId } = req.params;
   try {
@@ -275,14 +313,11 @@ export const getReceiptsByBuyer = async (req, res) => {
     res.status(500).json({ message: "Error fetching buyer receipts", error: error.message });
   }
 };
-// GET receipts filtered by buyer and/or date range
-// If buyerId + date range are provided → uses BuyerAccount.receiptIds array to fetch receipts,
-// then filters by createdAt (date range). Otherwise, uses standard query.
+
 export const getReceiptsFiltered = async (req, res) => {
   try {
     const { buyerId, startDate, endDate } = req.query;
 
-    // Helper to parse date-only strings to UTC date objects (start/end of day)
     const parseDateStart = (dateStr) => {
       if (!dateStr) return null;
       const d = new Date(dateStr);
@@ -299,7 +334,6 @@ export const getReceiptsFiltered = async (req, res) => {
     const start = parseDateStart(startDate);
     const end = parseDateEnd(endDate);
 
-    // Case 1: Specific buyer + date range → use BuyerAccount.receiptIds for performance
     if (buyerId && (start || end)) {
       const account = await BuyerAccount.findOne({ where: { buyerId } });
       if (!account) return res.json([]);
@@ -321,7 +355,6 @@ export const getReceiptsFiltered = async (req, res) => {
       return res.json(receipts);
     }
 
-    // Case 2: No buyerId, or only date range (or both missing)
     const where = {};
     if (buyerId) where.buyerId = buyerId;
     if (start || end) {
@@ -339,5 +372,167 @@ export const getReceiptsFiltered = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error fetching filtered receipts", error: error.message });
+  }
+};
+
+// ───────────────────────── UPDATE ─────────────────────────
+
+export const updateReceipt = async (req, res) => {
+  const { id } = req.params;
+  const { amountofmoney, description, buyerId } = req.body;
+
+  try {
+    const receipt = await Receipt.findByPk(id);
+    if (!receipt) return res.status(404).json({ message: "Receipt not found" });
+
+    if (amountofmoney !== undefined) {
+      try {
+        validateAmount(amountofmoney);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
+    if (buyerId !== undefined) {
+      const buyer = await Buyer.findByPk(buyerId);
+      if (!buyer) {
+        return res.status(400).json({ message: "Buyer not found" });
+      }
+    }
+
+    // ✅ NEW: resolve currency (fallback to existing receipt's values)
+    let updatedCurrency = null;
+    if (req.body.isAfn !== undefined || req.body.DV !== undefined) {
+      try {
+        updatedCurrency = resolveCurrencyFields(req.body, {
+          isAfn: receipt.isAfn,
+          DV: receipt.DV,
+        });
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+
+      // Block currency changes on already-applied receipts
+      const hasApplied =
+        Array.isArray(receipt.appliedTo) &&
+        receipt.appliedTo.some((a) => !a.type);
+      if (hasApplied && updatedCurrency.isAfn !== !!receipt.isAfn) {
+        return res.status(400).json({
+          message:
+            "Cannot change currency of a receipt that has already been applied to bills. " +
+            "Delete this receipt and create a new one instead.",
+        });
+      }
+    }
+
+    const updateData = {};
+    if (amountofmoney !== undefined) updateData.amountofmoney = parseFloat(amountofmoney);
+    if (description !== undefined) updateData.description = description?.trim() || null;
+    if (buyerId !== undefined) updateData.buyerId = buyerId;
+    if (updatedCurrency) {
+      updateData.isAfn = updatedCurrency.isAfn;
+      updateData.DV = updatedCurrency.DV;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: "No fields provided for update" });
+    }
+
+    await receipt.update(updateData);
+
+    res.json({ message: "Receipt updated successfully", receipt });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating receipt", error: error.message });
+  }
+};
+
+// ───────────────────────── DELETE ─────────────────────────
+
+export const deleteReceipt = async (req, res) => {
+  const { id } = req.params;
+
+  const transaction = await sequelize.transaction();
+  try {
+    const receipt = await Receipt.findByPk(id, { transaction });
+    if (!receipt) {
+      await transaction.rollback();
+      return res.status(404).json({ message: "Receipt not found" });
+    }
+
+    const { buyerId, amountofmoney } = receipt;
+    const receiptIsAfn = !!receipt.isAfn;
+    const receiptDV = parseFloat(receipt.DV) > 0 ? parseFloat(receipt.DV) : 65;
+
+    const bills = await Bill.findAll({
+      where: { buyerId },
+      order: [["createdAt", "DESC"]], // reverse order: refund latest paid bills first
+      transaction,
+    });
+
+    // ✅ NEW: refund is in RECEIPT currency; convert per bill to its currency
+    let remainingRefund = parseFloat(amountofmoney);
+    for (const bill of bills) {
+      if (remainingRefund <= 0.009) break;
+
+      const billIsAfn = !!bill.isAfn;
+      const sameCurrency = billIsAfn === receiptIsAfn;
+      const rate = parseFloat(bill.DV) > 0 ? parseFloat(bill.DV) : receiptDV;
+
+      const currentPaid = parseFloat(bill.paidAmount) || 0;
+      if (currentPaid <= 0) continue;
+
+      // Convert the refund available into the bill's currency
+      const availableInBillCurrency = convertAmount(
+        remainingRefund,
+        receiptIsAfn,
+        billIsAfn,
+        rate
+      );
+
+      // Refund applied to this bill, in the bill's currency
+      const amountToRefundInBillCurrency = round2(
+        Math.min(availableInBillCurrency, currentPaid)
+      );
+      if (amountToRefundInBillCurrency <= 0) continue;
+
+      // Amount consumed from the refund, in the receipt's currency
+      const consumedInReceiptCurrency = round2(
+        convertAmount(amountToRefundInBillCurrency, billIsAfn, receiptIsAfn, rate)
+      );
+
+      const newPaidAmount = round2(currentPaid - amountToRefundInBillCurrency);
+      const newRemaining = round2(
+        parseFloat(bill.remainingAmount) + amountToRefundInBillCurrency
+      );
+
+      let newStatus = bill.status;
+      if (newRemaining > 0 && newPaidAmount <= 0) newStatus = "unpaid";
+      else if (newPaidAmount > 0 && newRemaining > 0) newStatus = "partial";
+      else if (newRemaining <= 0) newStatus = "paid";
+
+      await bill.update(
+        {
+          paidAmount: newPaidAmount,
+          remainingAmount: newRemaining,
+          status: newStatus,
+        },
+        { transaction }
+      );
+
+      remainingRefund = round2(remainingRefund - consumedInReceiptCurrency);
+
+      // silence unused variable lint if sameCurrency was only informational
+      void sameCurrency;
+    }
+
+    await receipt.destroy({ transaction });
+    await syncBuyerAccountBills(buyerId, transaction);
+    await transaction.commit();
+
+    res.json({ message: "Receipt deleted and payments reversed" });
+  } catch (error) {
+    await transaction.rollback();
+    console.error(error);
+    res.status(500).json({ message: "Error deleting receipt", error: error.message });
   }
 };

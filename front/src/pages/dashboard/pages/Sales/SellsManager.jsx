@@ -2,39 +2,36 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import {
-  FaEdit,
   FaTrash,
   FaSpinner,
   FaPlus,
   FaTimes,
-  FaPrint,
   FaLayerGroup,
 } from "react-icons/fa";
 import Pagination from "../../pagination/Pagination";
 import SellForm from "./SellForm";
-import BSaleForm from "./BSaleForm"; // 👈 import blanket form
+import BSaleForm from "./BSaleForm";
 import BillReportsDownload from "../report/BillReportsDownload";
 import SingleBillDownload from "../report/SingleBillDownload";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const BILL_API = `${BASE_URL}/bill`;
 
+// ✅ currency helpers
+const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
+
 const SellManager = () => {
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [saleType, setSaleType] = useState("carpet");
 
-  // ─── Toggle: "carpet" or "blanket" ──────────────────────────────
-  const [saleType, setSaleType] = useState("carpet"); // "carpet" | "blanket"
-
-  // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
-  // Fetch bills with pagination
   const fetchBills = async (page = currentPage, limit = itemsPerPage) => {
     setLoading(true);
     try {
@@ -57,30 +54,13 @@ const SellManager = () => {
     fetchBills(currentPage, itemsPerPage);
   }, [currentPage, itemsPerPage]);
 
-  const handleEdit = async (bill) => {
-    const newNotes = prompt("توضیحات / یادداشت جدید:", bill.notes || "");
-    if (newNotes === null) return;
-    setLoading(true);
-    try {
-      await axios.put(`${BILL_API}/${bill.id}`, { notes: newNotes.trim() || null });
-      fetchBills(currentPage, itemsPerPage);
-    } catch (err) {
-      setError(err.response?.data?.message || "ویرایش ناکام ماند");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleDelete = async (id) => {
     if (!window.confirm("آیا از حذف این فاکتور مطمئن هستید؟")) return;
     setLoading(true);
     try {
       await axios.delete(`${BILL_API}/${id}`);
-      if (bills.length === 1 && currentPage > 1) {
-        setCurrentPage(currentPage - 1);
-      } else {
-        fetchBills(currentPage, itemsPerPage);
-      }
+      if (bills.length === 1 && currentPage > 1) setCurrentPage(currentPage - 1);
+      else fetchBills(currentPage, itemsPerPage);
     } catch (err) {
       setError(err.response?.data?.message || "حذف ناکام ماند");
     } finally {
@@ -89,9 +69,7 @@ const SellManager = () => {
   };
 
   const handlePageChange = (newPage) => {
-    if (newPage >= 1 && newPage <= totalPages) {
-      setCurrentPage(newPage);
-    }
+    if (newPage >= 1 && newPage <= totalPages) setCurrentPage(newPage);
   };
 
   const handleFormSuccess = () => {
@@ -99,9 +77,7 @@ const SellManager = () => {
     fetchBills(currentPage, itemsPerPage);
   };
 
-  const handleFormCancel = () => {
-    setShowForm(false);
-  };
+  const handleFormCancel = () => setShowForm(false);
 
   const getStatusBadge = (status) => {
     switch (status) {
@@ -121,16 +97,12 @@ const SellManager = () => {
         <p className="text-gray-600">مشاهده، ویرایش یادداشت و حذف فاکتورهای ثبت شده</p>
       </div>
 
-      {/* ─── Toggle & Add Buttons ─────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-center gap-4 mb-6">
-        {/* Sale type toggle */}
         <div className="flex items-center gap-2 bg-white rounded-xl shadow-md p-1 border border-gray-200">
           <button
             onClick={() => setSaleType("carpet")}
             className={`px-4 py-2 rounded-lg transition font-medium flex items-center gap-2 ${
-              saleType === "carpet"
-                ? "bg-cyan-700 text-white"
-                : "text-gray-600 hover:bg-gray-100"
+              saleType === "carpet" ? "bg-cyan-700 text-white" : "text-gray-600 hover:bg-gray-100"
             }`}
           >
             فروش فرش
@@ -138,9 +110,7 @@ const SellManager = () => {
           <button
             onClick={() => setSaleType("blanket")}
             className={`px-4 py-2 rounded-lg transition font-medium flex items-center gap-2 ${
-              saleType === "blanket"
-                ? "bg-cyan-700 text-white"
-                : "text-gray-600 hover:bg-gray-100"
+              saleType === "blanket" ? "bg-cyan-700 text-white" : "text-gray-600 hover:bg-gray-100"
             }`}
           >
             <FaLayerGroup />
@@ -148,16 +118,11 @@ const SellManager = () => {
           </button>
         </div>
 
-        {/* Add / Close button */}
         <div>
           {!showForm ? (
             <button
               onClick={() => setShowForm(true)}
-              className={`px-6 py-3 rounded-xl transition font-medium shadow-md flex items-center gap-2 ${
-                saleType === "carpet"
-                  ? "bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white"
-                  : "bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white"
-              }`}
+              className="px-6 py-3 bg-gradient-to-r from-cyan-800 to-cyan-600 hover:from-cyan-900 hover:to-cyan-700 text-white rounded-xl transition font-medium shadow-md flex items-center gap-2"
             >
               <FaPlus />
               ثبت فروش {saleType === "carpet" ? "فرش" : "بلنکت"}
@@ -200,6 +165,8 @@ const SellManager = () => {
                   area: "",
                   total: "",
                   unit_price: "",
+                  isAfn: false,
+                  DV: 65,
                 },
               ]}
             />
@@ -216,6 +183,8 @@ const SellManager = () => {
                   quantity: "",
                   unitPrice: "",
                   total: "",
+                  isAfn: false,
+                  DV: 65,
                 },
               ]}
             />
@@ -223,7 +192,6 @@ const SellManager = () => {
         </>
       )}
 
-      {/* ─── Bills Table (common for both) ─────────────────────────────── */}
       <div className="bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden">
         <div className="bg-gradient-to-r from-cyan-800 to-cyan-600 text-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -274,9 +242,12 @@ const SellManager = () => {
                     <th className="p-3 border-b font-semibold">شماره فاکتور</th>
                     <th className="p-3 border-b font-semibold">خریدار</th>
                     <th className="p-3 border-b font-semibold">تاریخ</th>
-                    <th className="p-3 border-b font-semibold">جمع کل (؋)</th>
-                    <th className="p-3 border-b font-semibold">پرداخت شده (؋)</th>
-                    <th className="p-3 border-b font-semibold">باقیمانده (؋)</th>
+                    {/* ✅ currency column */}
+                    <th className="p-3 border-b font-semibold">واحد</th>
+                    <th className="p-3 border-b font-semibold">نرخ دالر</th>
+                    <th className="p-3 border-b font-semibold">جمع کل</th>
+                    <th className="p-3 border-b font-semibold">پرداخت شده</th>
+                    <th className="p-3 border-b font-semibold">باقیمانده</th>
                     <th className="p-3 border-b font-semibold">وضعیت</th>
                     <th className="p-3 border-b font-semibold">تخفیف</th>
                     <th className="p-3 border-b font-semibold">یادداشت</th>
@@ -289,9 +260,18 @@ const SellManager = () => {
                       <td className="p-3 font-mono text-sm">{bill.billNumber}</td>
                       <td className="p-3 font-medium text-gray-800">{bill.buyer?.fullname || "—"}</td>
                       <td className="p-3 text-gray-600">{new Date(bill.date).toLocaleDateString("eng-en")}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(bill.totalAmount)}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(bill.paidAmount)}</td>
-                      <td className="p-3">{new Intl.NumberFormat().format(bill.remainingAmount)}</td>
+                      {/* ✅ currency badge */}
+                      <td className="p-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                          bill.isAfn ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                        }`}>
+                          {symbolFor(bill.isAfn)} {bill.isAfn ? "افغانی" : "دالر"}
+                        </span>
+                      </td>
+                      <td className="p-3 text-gray-600">{bill.DV ?? "—"}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.totalAmount)} {symbolFor(bill.isAfn)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.paidAmount)} {symbolFor(bill.isAfn)}</td>
+                      <td className="p-3">{new Intl.NumberFormat().format(bill.remainingAmount)} {symbolFor(bill.isAfn)}</td>
                       <td className="p-3">{getStatusBadge(bill.status)}</td>
                       <td className="p-3">{bill.discounted_amount}</td>
                       <td className="p-3 max-w-xs truncate">{bill.notes || "—"}</td>
@@ -312,11 +292,7 @@ const SellManager = () => {
                 </tbody>
               </table>
             </div>
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-            />
+            <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
             <div className="text-center text-gray-500 text-sm py-2 border-t">
               مجموع {totalItems} فاکتور | صفحه {currentPage} از {totalPages}
             </div>

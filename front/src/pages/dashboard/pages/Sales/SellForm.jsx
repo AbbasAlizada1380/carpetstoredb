@@ -1,3 +1,4 @@
+// components/stock/SellForm.jsx
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { FaSpinner, FaSave, FaTimes, FaMinusCircle, FaPlusCircle } from "react-icons/fa";
@@ -7,19 +8,30 @@ const SELLS_API_URL = `${BASE_URL}/sells`;
 const BUYER_API = `${BASE_URL}/buyer/active`;
 const TYPE_API = `${BASE_URL}/type`;
 
+// ✅ currency helpers
+const CURRENCY_SYMBOL = { afn: "؋", usd: "$" };
+const symbolFor = (isAfn) => (isAfn ? CURRENCY_SYMBOL.afn : CURRENCY_SYMBOL.usd);
+
+const emptyEntry = (defaults = {}) => ({
+  typeId: "",
+  categoryId: "",
+  incomeId: "",
+  incomeWidth: "",
+  length: "",
+  area: "",
+  total: "",
+  unit_price: "",
+  // ✅ per-row currency
+  isAfn: defaults.isAfn ?? false,
+  DV: defaults.DV ?? 65,
+});
+
 const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
-  const [entries, setEntries] = useState(
-    initialEntries || [{
-      typeId: "",
-      categoryId: "",
-      incomeId: "",
-      incomeWidth: "",
-      length: "",
-      area: "",
-      total: "",
-      unit_price: "",
-    }]
-  );
+  // ✅ global currency
+  const [globalIsAfn, setGlobalIsAfn] = useState(false);
+  const [globalDV, setGlobalDV] = useState(65);
+
+  const [entries, setEntries] = useState(initialEntries || [emptyEntry()]);
   const [buyers, setBuyers] = useState([]);
   const [buyerMode, setBuyerMode] = useState("existing");
   const [selectedBuyerId, setSelectedBuyerId] = useState("");
@@ -37,6 +49,17 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     fetchBuyers();
     fetchTypes();
   }, []);
+
+  // ✅ hydrate global currency from first entry when editing
+  useEffect(() => {
+    if (initialEntries && initialEntries.length > 0) {
+      const first = initialEntries[0];
+      if (first.isAfn !== undefined) setGlobalIsAfn(!!first.isAfn);
+      if (first.DV !== undefined && first.DV !== null) {
+        setGlobalDV(parseFloat(first.DV) || 65);
+      }
+    }
+  }, [initialEntries]);
 
   const fetchBuyers = async () => {
     try {
@@ -61,7 +84,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (categoriesMap[typeId]) return;
     try {
       const res = await axios.get(`${TYPE_API}/${typeId}/categories`);
-      setCategoriesMap(prev => ({ ...prev, [typeId]: res.data }));
+      setCategoriesMap((prev) => ({ ...prev, [typeId]: res.data }));
     } catch (err) {
       console.error(err);
     }
@@ -72,10 +95,10 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (incomesMap[categoryId]) return;
     try {
       const res = await axios.get(`${BASE_URL}/category/${categoryId}/incomes`);
-      setIncomesMap(prev => ({ ...prev, [categoryId]: res.data }));
+      setIncomesMap((prev) => ({ ...prev, [categoryId]: res.data }));
     } catch (err) {
       console.error("Error loading incomes for category:", err);
-      setIncomesMap(prev => ({ ...prev, [categoryId]: [] }));
+      setIncomesMap((prev) => ({ ...prev, [categoryId]: [] }));
     }
   };
 
@@ -92,7 +115,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
   };
 
   const recalcAll = (newEntries) => {
-    const updated = newEntries.map(entry => {
+    const updated = newEntries.map((entry) => {
       const { area, total } = calculateEntryValues(entry);
       return { ...entry, area, total };
     });
@@ -100,12 +123,35 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     return updated;
   };
 
-  // ─── FIXED: handleEntryChange ──────────────────────────────────────────
+  // ✅ per-row currency
+  const handleRowCurrencyChange = (index, isAfn) => {
+    const newEntries = [...entries];
+    newEntries[index].isAfn = isAfn;
+    setEntries(newEntries);
+  };
+
+  // ✅ per-row DV
+  const handleRowDVChange = (index, DV) => {
+    const newEntries = [...entries];
+    newEntries[index].DV = DV;
+    setEntries(newEntries);
+  };
+
+  // ✅ global currency / DV
+  const applyGlobalCurrency = (isAfn) => {
+    setGlobalIsAfn(isAfn);
+    setEntries((prev) => prev.map((e) => ({ ...e, isAfn })));
+  };
+
+  const applyGlobalDV = (DV) => {
+    setGlobalDV(DV);
+    setEntries((prev) => prev.map((e) => ({ ...e, DV })));
+  };
+
   const handleEntryChange = (index, field, value) => {
     const newEntries = [...entries];
     newEntries[index][field] = value;
 
-    // ── Special case: typeId change ──
     if (field === "typeId") {
       newEntries[index].categoryId = "";
       newEntries[index].incomeId = "";
@@ -114,65 +160,46 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       newEntries[index].area = "";
       newEntries[index].total = "";
       fetchCategoriesForType(value);
-    }
-    // ── Special case: categoryId change ──
-    else if (field === "categoryId") {
+    } else if (field === "categoryId") {
       newEntries[index].incomeId = "";
       newEntries[index].incomeWidth = "";
       newEntries[index].length = "";
       newEntries[index].area = "";
       newEntries[index].total = "";
       fetchIncomesForCategory(value);
-    }
-    // ── Special case: incomeId change ──
-    else if (field === "incomeId") {
+    } else if (field === "incomeId") {
       const selectedIncome = incomesMap[newEntries[index].categoryId]?.find(
-        inc => inc.id === parseInt(value)
+        (inc) => inc.id === parseInt(value)
       );
       newEntries[index].incomeWidth = selectedIncome ? selectedIncome.width : "";
       newEntries[index].length = "";
       newEntries[index].area = "";
       newEntries[index].total = "";
-    }
-    // ── Special case: manual total edit ──
-    else if (field === "total") {
+    } else if (field === "total") {
       const totalVal = parseFloat(value);
       if (!isNaN(totalVal)) {
         const length = parseFloat(newEntries[index].length) || 0;
         if (length > 0) {
-          const newUnitPrice = totalVal / length;
-          newEntries[index].unit_price = parseFloat(newUnitPrice.toFixed(2));
+          newEntries[index].unit_price = parseFloat((totalVal / length).toFixed(2));
         } else {
           newEntries[index].unit_price = 0;
         }
       }
-      // ✅ Do NOT call recalcAll – preserve user input
       setEntries(newEntries);
       return;
     }
 
-    // ── For other fields: recalc area & total for the changed entry ──
     if (["length", "unit_price", "incomeWidth"].includes(field)) {
       const { area, total } = calculateEntryValues(newEntries[index]);
       newEntries[index].area = area;
       newEntries[index].total = total;
     }
 
-    // Recalc all entries (for cascading updates)
     recalcAll(newEntries);
   };
 
   const addEntry = () => {
-    setEntries([...entries, {
-      typeId: "",
-      categoryId: "",
-      incomeId: "",
-      incomeWidth: "",
-      length: "",
-      area: "",
-      total: "",
-      unit_price: "",
-    }]);
+    setEntries([...entries, emptyEntry({ isAfn: globalIsAfn, DV: globalDV })]);
   };
 
   const removeEntry = (index) => {
@@ -190,10 +217,11 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
     if (!entry.incomeId) return "درآمد (Income) باید انتخاب شود";
     if (!entry.length || parseFloat(entry.length) <= 0) return "طول باید بزرگتر از صفر باشد";
     if (!entry.unit_price || parseFloat(entry.unit_price) <= 0) return "قیمت واحد باید بزرگتر از صفر باشد";
+    if (!entry.DV || parseFloat(entry.DV) <= 0) return "نرخ دالر باید بزرگتر از صفر باشد";
     return null;
   };
 
-  const originalTotal = entries.reduce((sum, entry) => sum + (parseFloat(entry.total) || 0), 0);
+  const originalTotal = entries.reduce((sum, e) => sum + (parseFloat(e.total) || 0), 0);
   const discount = parseFloat(discountAmount) || 0;
   const totalAmount = Math.max(originalTotal - discount, 0);
   const receiptValue = parseFloat(totalReceipt) || 0;
@@ -210,11 +238,19 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       }
     }
 
+    // ✅ single currency per bill
+    const currencySet = new Set(entries.map((en) => !!en.isAfn));
+    if (currencySet.size > 1) {
+      setError(
+        "همه ردیف‌ها باید یک واحد پول داشته باشند. لطفاً واحد پول را یکسان کنید یا فاکتور را جدا ثبت کنید."
+      );
+      return;
+    }
+
     if (discount > originalTotal + 0.01) {
       setError("مبلغ تخفیف نمی‌تواند بیشتر از کل فاکتور باشد");
       return;
     }
-
     if (receiptValue < 0) {
       setError("مبلغ دریافتی نمی‌تواند منفی باشد");
       return;
@@ -239,11 +275,10 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       mainPayload.newBuyer = newBuyerName.trim();
     }
 
-    // Distribute receipt proportionally
     const totalOriginal = originalTotal;
     const totalReceiptToDistribute = receiptValue;
 
-    const baseEntries = entries.map(entry => ({
+    const baseEntries = entries.map((entry) => ({
       ...entry,
       amount: parseFloat(entry.total) || 0,
       length: parseFloat(entry.length) || 0,
@@ -251,21 +286,21 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       area: parseFloat(entry.area) || 0,
       incomeId: entry.incomeId,
       categoryId: entry.categoryId,
+      isAfn: !!entry.isAfn,
+      DV: parseFloat(entry.DV) || 65,
     }));
 
-    let shares = baseEntries.map(entry => {
-      if (totalOriginal === 0) return 0;
-      return (entry.amount / totalOriginal) * totalReceiptToDistribute;
-    });
-    shares = shares.map(s => Math.round(s * 100) / 100);
+    let shares = baseEntries.map((entry) =>
+      totalOriginal === 0 ? 0 : (entry.amount / totalOriginal) * totalReceiptToDistribute
+    );
+    shares = shares.map((s) => Math.round(s * 100) / 100);
     shares = shares.map((s, idx) => Math.min(s, baseEntries[idx].amount));
 
     let sumShares = shares.reduce((a, b) => a + b, 0);
     let diff = Math.round((totalReceiptToDistribute - sumShares) * 100) / 100;
     if (Math.abs(diff) > 0.001 && shares.length > 0) {
       const lastIdx = shares.length - 1;
-      let newShare = shares[lastIdx] + diff;
-      newShare = Math.min(newShare, baseEntries[lastIdx].amount);
+      let newShare = Math.min(shares[lastIdx] + diff, baseEntries[lastIdx].amount);
       newShare = Math.max(newShare, 0);
       shares[lastIdx] = newShare;
     }
@@ -282,11 +317,16 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         unit_price: entry.unit_price,
         receipt: Math.round(receipt * 100) / 100,
         remaind: Math.round(remaind * 100) / 100,
+        // ✅ per-row currency
+        isAfn: entry.isAfn,
+        DV: entry.DV,
       };
     });
 
     mainPayload.sells = sellsArray;
     mainPayload.discount_amount = parseFloat(discountAmount) || 0;
+    mainPayload.isAfn = !!globalIsAfn;
+    mainPayload.DV = parseFloat(globalDV) || 65;
 
     setSubmitLoading(true);
     setError("");
@@ -299,21 +339,14 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
 
       onSuccess();
       if (!editingId) {
-        setEntries([{
-          typeId: "",
-          categoryId: "",
-          incomeId: "",
-          incomeWidth: "",
-          length: "",
-          area: "",
-          total: "",
-          unit_price: "",
-        }]);
+        setEntries([emptyEntry()]);
         setBuyerMode("existing");
         setSelectedBuyerId("");
         setNewBuyerName("");
         setTotalReceipt("");
         setDiscountAmount("");
+        setGlobalIsAfn(false);
+        setGlobalDV(65);
       } else {
         onCancel();
       }
@@ -346,7 +379,9 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
       )}
 
       <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-        <label className="block text-sm font-medium text-gray-700 mb-2">خریدار <span className="text-red-500">*</span></label>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          خریدار <span className="text-red-500">*</span>
+        </label>
         <div className="flex gap-4 mb-3">
           <label className="flex items-center gap-2">
             <input type="radio" value="existing" checked={buyerMode === "existing"} onChange={() => setBuyerMode("existing")} />
@@ -360,11 +395,44 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         {buyerMode === "existing" ? (
           <select value={selectedBuyerId} onChange={(e) => setSelectedBuyerId(e.target.value)} className="w-full border rounded-lg px-4 py-2" required>
             <option value="">انتخاب خریدار</option>
-            {buyers.map(b => <option key={b.id} value={b.id}>{b.fullname}</option>)}
+            {buyers.map((b) => (
+              <option key={b.id} value={b.id}>{b.fullname}</option>
+            ))}
           </select>
         ) : (
           <input type="text" value={newBuyerName} onChange={(e) => setNewBuyerName(e.target.value)} placeholder="نام خریدار جدید" className="w-full border rounded-lg px-4 py-2" required />
         )}
+      </div>
+
+      {/* ✅ Global currency controls */}
+      <div className="mb-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">واحد پول پیش‌فرض:</span>
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={globalIsAfn === false} onChange={() => applyGlobalCurrency(false)} />
+              دالر ($)
+            </label>
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={globalIsAfn === true} onChange={() => applyGlobalCurrency(true)} />
+              افغانی (؋)
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">نرخ دالر (DV):</span>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={globalDV}
+              onChange={(e) => applyGlobalDV(e.target.value)}
+              className="w-28 border rounded-lg px-2 py-1 text-sm"
+            />
+          </div>
+          <span className="text-xs text-gray-500">
+            (این مقدار به همه ردیف‌ها اعمال می‌شود؛ هر ردیف می‌تواند جداگانه تغییر کند)
+          </span>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit}>
@@ -380,6 +448,9 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 <th className="p-2 border">طول (متر)*</th>
                 <th className="p-2 border">مساحت (محاسبه)</th>
                 <th className="p-2 border">قیمت واحد*</th>
+                {/* ✅ per-row currency + DV */}
+                <th className="p-2 border">واحد</th>
+                <th className="p-2 border">DV</th>
                 <th className="p-2 border">مبلغ کل (قابل ویرایش)</th>
                 <th className="p-2 border">عملیات</th>
               </tr>
@@ -396,7 +467,9 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       required
                     >
                       <option value="">انتخاب نوع</option>
-                      {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      {types.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
                     </select>
                   </td>
                   <td className="p-2">
@@ -408,7 +481,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       required
                     >
                       <option value="">انتخاب دسته</option>
-                      {categoriesMap[entry.typeId]?.map(cat => (
+                      {categoriesMap[entry.typeId]?.map((cat) => (
                         <option key={cat.id} value={cat.id}>{cat.name}</option>
                       ))}
                     </select>
@@ -422,7 +495,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       required
                     >
                       <option value="">انتخاب درآمد</option>
-                      {incomesMap[entry.categoryId]?.map(inc => (
+                      {incomesMap[entry.categoryId]?.map((inc) => (
                         <option key={inc.id} value={inc.id}>
                           {inc.lotNumber} - {inc.width}x{inc.length} - {inc.color}
                         </option>
@@ -452,6 +525,29 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       required
                     />
                   </td>
+                  {/* ✅ per-row currency */}
+                  <td className="p-2">
+                    <select
+                      value={entry.isAfn ? "afn" : "usd"}
+                      onChange={(e) => handleRowCurrencyChange(idx, e.target.value === "afn")}
+                      className="w-20 border rounded px-1 py-1"
+                    >
+                      <option value="usd">$ دالر</option>
+                      <option value="afn">؋ افغانی</option>
+                    </select>
+                  </td>
+                  {/* ✅ per-row DV */}
+                  <td className="p-2">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={entry.DV}
+                      onChange={(e) => handleRowDVChange(idx, e.target.value)}
+                      className="w-20 border rounded px-1 py-1"
+                      required
+                    />
+                  </td>
                   <td className="p-2">
                     <input
                       type="number"
@@ -460,6 +556,7 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                       onChange={(e) => handleEntryChange(idx, "total", e.target.value)}
                       className="w-24 border rounded px-1 py-1"
                     />
+                    <div className="text-xs text-gray-500 mt-1">{symbolFor(entry.isAfn)}</div>
                   </td>
                   <td className="p-2 text-center">
                     <button type="button" onClick={() => removeEntry(idx)} className="text-red-600 hover:text-red-800">
@@ -473,32 +570,13 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
         </div>
 
         <div className="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {/* <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل (قبل از تخفیف)</label>
-              <div className="text-xl font-bold text-gray-600">{originalTotal.toFixed(2)} ؋</div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">تخفیف (مبلغ)</label>
-              <input
-                type="number"
-                step="any"
-                value={discountAmount}
-                onChange={(e) => setDiscountAmount(e.target.value)}
-                className="w-full border rounded-lg px-3 py-2 text-lg"
-                placeholder="مبلغ تخفیف"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل فاکتور</label>
+              <div className="text-2xl font-bold text-indigo-700">
+                {totalAmount.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">جمع کل پس از تخفیف</label>
-              <div className="text-2xl font-bold text-indigo-700">{totalAmount.toFixed(2)} ؋</div>
-            </div> */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
-              <div className="text-2xl font-bold text-red-600">{totalRemaind.toFixed(2)} ؋</div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">مبلغ دریافتی (کل)</label>
               <input
@@ -509,6 +587,12 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
                 className="w-full border rounded-lg px-3 py-2 text-lg"
                 placeholder="مبلغ دریافت شده"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">باقیمانده کل</label>
+              <div className="text-2xl font-bold text-red-600">
+                {totalRemaind.toFixed(2)} {symbolFor(globalIsAfn)}
+              </div>
             </div>
           </div>
         </div>
@@ -524,9 +608,6 @@ const SellForm = ({ onSuccess, editingId, initialEntries, onCancel }) => {
             </button>
           </div>
         </div>
-        <p className="text-xs text-gray-400 mt-3">
-          مساحت = عرض × طول. مبلغ کل = طول × قیمت واحد (قابل ویرایش مستقیم). تخفیف از کل کسر می‌شود.
-        </p>
       </form>
     </div>
   );
