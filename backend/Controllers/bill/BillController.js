@@ -3,6 +3,79 @@ import { Customer } from "../../Models/index.js";
 import Exist from "../../Models/Stock/exist.js";
 import { Op } from "sequelize";
 import { Bill, Buyer, Sells, Category, Income, Type } from "../../Models/index.js"; // ensure Sells is imported
+import {  bExist} from "../../Models/index.js";
+import {BSales} from "../../Models/index.js";
+// ========== GET BILL DETAILS (bill + sells + bsales) ==========
+// GET /bill/:id/details
+// One request returns the bill and both child arrays with full includes.
+// Ideal for `SellManager.handleEdit` / `handleEditBlanket`.
+export const getBillDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const bill = await Bill.findByPk(id, {
+      include: [
+        {
+          model: Buyer,
+          as: "buyer",
+          attributes: ["id", "fullname", "phoneNumber"],
+        },
+      ],
+    });
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
+
+    const billJson = bill.toJSON();
+
+    const sellIds = Array.isArray(billJson.sells) ? billJson.sells : [];
+    const bsaleIds = Array.isArray(billJson.bsales) ? billJson.bsales : [];
+
+    const [sells, bsales] = await Promise.all([
+      sellIds.length
+        ? Sells.findAll({
+            where: { id: sellIds },
+            include: [
+              {
+                model: Category,
+                as: "categoryDetail",
+                include: [{ model: Type, as: "type" }],
+              },
+              { model: Income, as: "income" },
+              { model: Buyer, as: "buyer" },
+            ],
+          })
+        : Promise.resolve([]),
+      bsaleIds.length
+        ? BSales.findAll({
+            where: { id: bsaleIds },
+            include: [
+              { model: Category, as: "category" },
+              { model: bExist, as: "bExist" },
+              { model: Buyer, as: "buyer" },
+            ],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    // Preserve the ID order from the bill (so forms map rows back correctly)
+    const sellMap = new Map(sells.map((s) => [s.id, s]));
+    const bsaleMap = new Map(bsales.map((b) => [b.id, b]));
+
+    billJson.sellRecords = sellIds
+      .map((sid) => sellMap.get(sid))
+      .filter(Boolean)
+      .map((s) => s.toJSON());
+
+    billJson.bsaleRecords = bsaleIds
+      .map((bid) => bsaleMap.get(bid))
+      .filter(Boolean)
+      .map((b) => b.toJSON());
+
+    res.status(200).json(billJson);
+  } catch (error) {
+    console.error("Error in getBillDetails:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
 /* ===============================
    GET ALL BILLS (with customer, sells items, products)
 ================================ */
@@ -26,7 +99,7 @@ export const getAllBills = async (req, res) => {
       attributes: [
         "id", "billNumber", "buyerId", "date", "totalAmount", "paidAmount",
         "remainingAmount", "status", "notes", "discount_percent", "discounted_amount",
-        "sells", "createdAt", "updatedAt"
+        "sells", "bsales", "createdAt", "updatedAt","DV","isAfn"
       ],
       order: [["createdAt", "DESC"]],
       limit,
@@ -103,57 +176,134 @@ export const getBillById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Bill not found" });
     }
 
-    // Manually fetch sells using the IDs stored in bill.sells (array of integers)
-    let sells = [];
-    if (bill.sells && Array.isArray(bill.sells) && bill.sells.length > 0) {
-      sells = await Sells.findAll({
-        where: { id: bill.sells },
-        include: [
-          {
-            model: Category,
-            as: "categoryDetail",           // matches association: Sells.belongsTo(Category, { as: "categoryDetail" })
-            attributes: ["id", "name", "typeId"],
+    const billJson = bill.toJSON();
+
+    const sellIds = Array.isArray(billJson.sells) ? billJson.sells : [];
+    const bsaleIds = Array.isArray(billJson.bsales) ? billJson.bsales : [];
+
+    // ─── Bulk-fetch carpet Sells AND blanket BSales in parallel ─────────
+    const [sells, bsales] = await Promise.all([
+      sellIds.length
+        ? Sells.findAll({
+            where: { id: sellIds },
             include: [
               {
-                model: Type,
-                as: "type",                 // matches association: Category.belongsTo(Type, { as: "type" })
-                attributes: ["id", "name"],
+                model: Category,
+                as: "categoryDetail",
+                attributes: ["id", "name", "typeId"],
+                include: [
+                  {
+                    model: Type,
+                    as: "type",
+                    attributes: ["id", "name"],
+                  },
+                ],
+              },
+              {
+                model: Income,
+                as: "income",
+                attributes: [
+                  "id",
+                  "length",
+                  "width",
+                  "area",
+                  "unit_price",
+                  "color",
+                  "degree",
+                  "lotNumber",
+                ],
               },
             ],
-          },
-          {
-            model: Income,
-            as: "income",                   // matches association: Sells.belongsTo(Income, { as: "income" })
-            attributes: ["id", "length", "width", "area", "unit_price", "color", "degree", "lotNumber"],
-          },
-        ],
+          })
+        : Promise.resolve([]),
+      bsaleIds.length
+        ? BSales.findAll({
+            where: { id: bsaleIds },
+            include: [
+              {
+                model: Category,
+                as: "category",
+                attributes: ["id", "name", "typeId"],
+                include: [
+                  {
+                    model: Type,
+                    as: "type",
+                    attributes: ["id", "name"],
+                  },
+                ],
+              },
+              {
+                model: bExist,
+                as: "bExist",
+                attributes: ["id", "quantity", "unitPrice", "categoryId"],
+              },
+              {
+                model: Buyer,
+                as: "buyer",
+                attributes: ["id", "fullname"],
+              },
+            ],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    // ─── Normalize Sells (add flat category + type) ─────────────────────
+    const sellMap = new Map(sells.map((s) => [s.id, s]));
+    const normalizedSells = sellIds
+      .map((sid) => sellMap.get(sid))
+      .filter(Boolean)
+      .map((sell) => {
+        const plain = sell.toJSON();
+        const category = plain.categoryDetail || null;
+        const type = category?.type || null;
+        return {
+          ...plain,
+          category: category ? { id: category.id, name: category.name } : null,
+          type: type ? { id: type.id, name: type.name } : null,
+        };
       });
-    }
 
-    // Convert bill to plain object and attach the sells array
-    const billData = bill.toJSON();
+    // ─── Normalize BSales (add flat category + type + bExist) ──────────
+    const bsaleMap = new Map(bsales.map((b) => [b.id, b]));
+    const normalizedBSales = bsaleIds
+      .map((bid) => bsaleMap.get(bid))
+      .filter(Boolean)
+      .map((bsale) => {
+        const plain = bsale.toJSON();
+        const category = plain.category || null;
+        const type = category?.type || null;
+        return {
+          ...plain,
+          category: category ? { id: category.id, name: category.name } : null,
+          type: type ? { id: type.id, name: type.name } : null,
+          // bExist already present from include, but ensure it's here
+          bExist: plain.bExist || null,
+        };
+      });
 
-    // Normalize the sells output so each item exposes category + type directly
-    billData.sells = sells.map((sell) => {
-      const plain = sell.toJSON();
-      const category = plain.categoryDetail || null;
-      const type = category?.type || null;
+    // ─── Attach both arrays to the bill response ────────────────────────
+    // Primary keys used by the edit forms:
+    billJson.sellRecords = normalizedSells;
+    billJson.bsaleRecords = normalizedBSales;
 
-      return {
-        ...plain,
-        category: category
-          ? { id: category.id, name: category.name }
-          : null,
-        type: type
-          ? { id: type.id, name: type.name }
-          : null,
-      };
-    });
+    // Back-compat: previously `bill.sells` was a flat array of Sells.
+    // Keep the raw ID arrays as separate keys so nothing is ambiguous.
+    billJson.sellIds = sellIds;
+    billJson.bsaleIds = bsaleIds;
 
-    res.json({ success: true, bill: billData });
+    // If existing frontend code expects `bill.sells` to be the populated
+    // array (like your current getBillById does), keep that behavior too:
+    billJson.sells = normalizedSells;
+    billJson.bsales = normalizedBSales;
+
+    res.json({ success: true, bill: billJson });
   } catch (error) {
     console.error("Error in getBillById:", error);
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
 /* ===============================

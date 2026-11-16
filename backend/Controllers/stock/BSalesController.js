@@ -8,8 +8,63 @@ import {
   BuyerAccount,
   Receipt,
   Bill,
+  Sells,
   sequelize,
 } from "../../Models/index.js";
+
+// ─── SHARED HELPERS ──────────────────────────────────────────────────────
+
+const syncBillTotals = async (billId, transaction = null) => {
+  if (!billId) return null;
+
+  const bill = await Bill.findByPk(billId, { transaction });
+  if (!bill) return null;
+
+  const sellIds = Array.isArray(bill.sells) ? bill.sells : [];
+  const bsaleIds = Array.isArray(bill.bsales) ? bill.bsales : [];
+
+  const [sells, bsales] = await Promise.all([
+    sellIds.length
+      ? Sells.findAll({ where: { id: sellIds }, transaction })
+      : Promise.resolve([]),
+    bsaleIds.length
+      ? BSales.findAll({ where: { id: bsaleIds }, transaction })
+      : Promise.resolve([]),
+  ]);
+
+  const sum = (arr, key) =>
+    arr.reduce((s, r) => s + (parseFloat(r[key]) || 0), 0);
+
+  const totalAmount =
+    Math.round((sum(sells, "total") + sum(bsales, "total")) * 100) / 100;
+  const paidAmount =
+    Math.round((sum(sells, "receipt") + sum(bsales, "receipt")) * 100) / 100;
+  const remainingAmount = Math.max(
+    Math.round((totalAmount - paidAmount) * 100) / 100,
+    0
+  );
+
+  let status = "unpaid";
+  if (remainingAmount <= 0.009) status = "paid";
+  else if (paidAmount > 0) status = "partial";
+
+  await bill.update(
+    { totalAmount, paidAmount, remainingAmount, status },
+    { transaction }
+  );
+
+  return bill;
+};
+
+const findBillsForSell = async (sellId, transaction = null) => {
+  const [rows] = await sequelize.query(
+    `SELECT id FROM Bill
+     WHERE JSON_CONTAINS(COALESCE(sells, JSON_ARRAY()), CAST(:sellId AS JSON))
+        OR JSON_CONTAINS(COALESCE(bsales, JSON_ARRAY()), CAST(:sellId AS JSON))`,
+    { replacements: { sellId }, transaction }
+  );
+  return rows;
+};
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────
 
@@ -26,7 +81,6 @@ const generateBillNumber = async () => {
   return `BBILL-${nextNumber.toString().padStart(6, "0")}`;
 };
 
-// ─── NEW: per-sale currency parse ────────────────────────────────────────
 const parseDvAndIsAfn = (entry, index) => {
   let dv = 0;
   if (entry.DV !== undefined && entry.DV !== null && entry.DV !== "") {
@@ -47,7 +101,6 @@ const parseDvAndIsAfn = (entry, index) => {
   return { dv, isAfn };
 };
 
-// ─── NEW: bill-level currency resolution ─────────────────────────────────
 const resolveBillCurrency = (body, parsedEntries) => {
   const first = parsedEntries[0] || {};
 
@@ -139,7 +192,6 @@ export const createBSale = async (req, res) => {
         throw new Error(`BSale ${i + 1}: Amount mismatch`);
       }
 
-      // ── NEW ──
       const { dv, isAfn } = parseDvAndIsAfn(saleData, i);
 
       const receiptAmount = parseFloat(receipt) || 0;
@@ -158,7 +210,7 @@ export const createBSale = async (req, res) => {
       };
     });
 
-    // ── NEW: single currency per bill ──
+    // ── 3. Single currency per bill ──
     const currencies = new Set(parsedSales.map((s) => s.isAfn));
     if (currencies.size > 1) {
       await t.rollback();
@@ -170,7 +222,7 @@ export const createBSale = async (req, res) => {
 
     const billCurrency = resolveBillCurrency(req.body, parsedSales);
 
-    // ── 3. Process sales ──
+    // ── 4. Process sales ──
     const createdBSales = [];
     let totalAmountSum = 0;
     let totalReceiptSum = 0;
@@ -179,6 +231,7 @@ export const createBSale = async (req, res) => {
       const stock = await bExist.findByPk(ps.bexistId, {
         include: [{ model: Category, as: "category" }],
         transaction: t,
+        lock: true,
       });
       if (!stock) throw new Error(`bExist record ${ps.bexistId} not found`);
 
@@ -190,7 +243,6 @@ export const createBSale = async (req, res) => {
       const newQty = availableQty - ps.qtyNum;
       await stock.update({ quantity: newQty }, { transaction: t });
 
-      // Create BSale (with DV / isAfn)
       const newSale = await BSales.create(
         {
           categoryId: stock.categoryId,
@@ -201,7 +253,6 @@ export const createBSale = async (req, res) => {
           remaind: ps.finalRemaind,
           total: ps.amountNum,
           buyerId: finalBuyerId,
-          // NEW
           DV: ps.DV,
           isAfn: ps.isAfn,
         },
@@ -213,7 +264,7 @@ export const createBSale = async (req, res) => {
       totalReceiptSum += ps.receiptAmount;
     }
 
-    // ── 4. Discount + receipt validation ──
+    // ── 5. Discount + receipt validation ──
     if (discountVal > totalAmountSum) {
       await t.rollback();
       return res.status(400).json({ message: "Discount amount cannot exceed total invoice amount" });
@@ -225,7 +276,7 @@ export const createBSale = async (req, res) => {
       return res.status(400).json({ message: "Receipt amount exceeds total after discount" });
     }
 
-    // ── 5. Bill (with DV / isAfn) ──
+    // ── 6. Bill ──
     const billNumber = await generateBillNumber();
     const remainingAmount = discountedTotal - totalReceiptSum;
     let status = "unpaid";
@@ -247,14 +298,13 @@ export const createBSale = async (req, res) => {
         discounted_amount: discountVal,
         sells: [],
         bsales: saleIds,
-        // NEW
         DV: billCurrency.DV,
         isAfn: billCurrency.isAfn,
       },
       { transaction: t }
     );
 
-    // ── 6. BuyerAccount ──
+    // ── 7. BuyerAccount ──
     let account = await BuyerAccount.findOne({
       where: { buyerId: finalBuyerId },
       transaction: t,
@@ -297,14 +347,14 @@ export const createBSale = async (req, res) => {
       { transaction: t }
     );
 
-    // ── 7. Receipt ──
+    // ── 8. Receipt ──
     let createdReceipt = null;
     if (totalReceiptSum > 0) {
       const receipt = await Receipt.create(
         {
           buyerId: finalBuyerId,
           amountofmoney: totalReceiptSum,
-          description: `پرداخت برای فاکتور ${billNumber} (جمع کل ${totalAmountSum}؋، تخفیف ${discountVal}؋)`,
+          description: `پرداخت برای فاکتور ${billNumber} (جمع کل ${totalAmountSum}، تخفیف ${discountVal})`,
         },
         { transaction: t }
       );
@@ -333,20 +383,41 @@ export const createBSale = async (req, res) => {
       receipt: createdReceipt,
     });
   } catch (error) {
-    await t.rollback();
+    if (!t.finished) await t.rollback();
     console.error("Error creating BSale:", error);
     res.status(500).json({ error: error.message });
   }
 };
 
 // ─── GET ALL ──────────────────────────────────────────────────────────────
+// Optionally filter by ?billId=<id>
 export const getAllBSales = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
+    // ✅ NEW: filter by billId if provided
+    const where = {};
+    const { billId } = req.query;
+
+    if (billId) {
+      const bill = await Bill.findByPk(billId, { attributes: ["bsales"] });
+      if (!bill) return res.status(404).json({ error: "Bill not found" });
+      const ids = Array.isArray(bill.bsales) ? bill.bsales : [];
+      if (ids.length === 0) {
+        return res.status(200).json({
+          data: [],
+          totalItems: 0,
+          totalPages: 0,
+          currentPage: page,
+        });
+      }
+      where.id = ids;
+    }
+
     const { count, rows } = await BSales.findAndCountAll({
+      where,
       include: [
         { model: Category, as: "category" },
         { model: bExist, as: "bExist" },
@@ -386,50 +457,247 @@ export const getBSaleById = async (req, res) => {
   }
 };
 
-// ─── UPDATE ──────────────────────────────────────────────────────────────
-export const updateBSale = async (req, res) => {
+// ─── GET ALL BSALES FOR A BILL ───────────────────────────────────────────
+// GET /bsales/by-bill/:billId
+// Returns every BSale referenced in Bill.bsales, in the same order,
+// with all includes. 404 if the bill is missing; [] if it has none.
+export const getBSalesByBillId = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { categoryId, bexistId, unit_price, quantity, receipt, remaind, buyerId, newBuyer, DV, isAfn } = req.body;
+    const { billId } = req.params;
 
-    const sale = await BSales.findByPk(id);
-    if (!sale) return res.status(404).json({ message: "BSale not found" });
+    const bill = await Bill.findByPk(billId, {
+      attributes: ["id", "billNumber", "sells", "bsales"],
+    });
+    if (!bill) return res.status(404).json({ message: "Bill not found" });
 
-    if (buyerId !== undefined || newBuyer !== undefined) {
-      let finalBuyerId = sale.buyerId;
-      try {
-        if (buyerId) {
-          const buyer = await Buyer.findByPk(buyerId);
-          if (!buyer) throw new Error("Selected buyer does not exist");
-          finalBuyerId = buyer.id;
-        } else if (newBuyer && newBuyer.trim()) {
-          const trimmed = newBuyer.trim();
-          let buyer = await Buyer.findOne({ where: { fullname: trimmed } });
-          if (!buyer) buyer = await Buyer.create({ fullname: trimmed, isActive: false });
-          finalBuyerId = buyer.id;
-        }
-      } catch (error) {
-        return res.status(400).json({ message: error.message });
-      }
-      sale.buyerId = finalBuyerId;
+    const bsaleIds = Array.isArray(bill.bsales) ? bill.bsales : [];
+    if (bsaleIds.length === 0) {
+      return res.status(200).json({
+        billId: bill.id,
+        billNumber: bill.billNumber,
+        total: 0,
+        data: [],
+      });
     }
 
-    if (bexistId !== undefined && bexistId !== sale.bexistId) {
+    const bsales = await BSales.findAll({
+      where: { id: bsaleIds },
+      include: [
+        { model: Category, as: "category" },
+        { model: bExist, as: "bExist" },
+        { model: Buyer, as: "buyer" },
+      ],
+    });
+
+    // Preserve the order the IDs appear in bill.bsales
+    const map = new Map(bsales.map((b) => [b.id, b]));
+    const ordered = bsaleIds
+      .map((id) => map.get(id))
+      .filter(Boolean)
+      .map((b) => b.toJSON());
+
+    res.status(200).json({
+      billId: bill.id,
+      billNumber: bill.billNumber,
+      total: ordered.length,
+      data: ordered,
+    });
+  } catch (error) {
+    console.error("Error in getBSalesByBillId:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ─── UPDATE ──────────────────────────────────────────────────────────────
+export const updateBSale = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const {
+      categoryId,
+      bexistId,
+      unit_price,
+      quantity,
+      receipt,
+      remaind,
+      total,
+      buyerId,
+      newBuyer,
+      DV,
+      isAfn,
+    } = req.body;
+
+    const sale = await BSales.findByPk(id, { transaction: t });
+    if (!sale) {
+      await t.rollback();
+      return res.status(404).json({ message: "BSale not found" });
+    }
+
+    // bexistId change: rejected
+    if (bexistId !== undefined && parseInt(bexistId) !== parseInt(sale.bexistId)) {
+      await t.rollback();
       return res.status(400).json({ message: "Changing bexistId is not allowed; create a new sale instead." });
     }
 
-    if (categoryId !== undefined) sale.categoryId = categoryId;
-    if (unit_price !== undefined) sale.unit_price = unit_price;
-    if (quantity !== undefined) sale.quantity = quantity;
-    if (receipt !== undefined) sale.receipt = receipt;
-    if (remaind !== undefined) sale.remaind = remaind;
+    const parentBills = await findBillsForSell(sale.id, t);
+    const isOnBill = parentBills.length > 0;
 
-    // ── NEW: currency fields ──
+    // Buyer change: only allowed if not attached to a bill
+    if ((buyerId !== undefined || newBuyer !== undefined) && isOnBill) {
+      await t.rollback();
+      return res.status(400).json({
+        message:
+          "Cannot change the buyer of a blanket sale that is already attached to a bill. Delete the bill first.",
+      });
+    }
+
+    if (buyerId !== undefined || newBuyer !== undefined) {
+      try {
+        if (buyerId) {
+          const buyer = await Buyer.findByPk(buyerId, { transaction: t });
+          if (!buyer) throw new Error("Selected buyer does not exist");
+          sale.buyerId = buyer.id;
+        } else if (newBuyer && newBuyer.trim()) {
+          const trimmed = newBuyer.trim();
+          let buyer = await Buyer.findOne({ where: { fullname: trimmed }, transaction: t });
+          if (!buyer) {
+            buyer = await Buyer.create(
+              { fullname: trimmed, isActive: false },
+              { transaction: t }
+            );
+          }
+          sale.buyerId = buyer.id;
+        }
+      } catch (err) {
+        await t.rollback();
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
+    // ✅ Currency consistency — only fire if the currency is ACTUALLY changing
+    if (isAfn !== undefined && isOnBill) {
+      let nextIsAfn;
+      if (typeof isAfn === "boolean") nextIsAfn = isAfn;
+      else if (isAfn === 1 || isAfn === "1" || isAfn === "true") nextIsAfn = true;
+      else if (isAfn === 0 || isAfn === "0" || isAfn === "false") nextIsAfn = false;
+      else {
+        await t.rollback();
+        return res.status(400).json({ error: "isAfn must be a boolean" });
+      }
+
+      const currentIsAfn = !!sale.isAfn;
+      if (nextIsAfn !== currentIsAfn) {
+        const billRow = await Bill.findByPk(parentBills[0].id, { transaction: t });
+        if (billRow && !!billRow.isAfn !== nextIsAfn) {
+          await t.rollback();
+          return res.status(400).json({
+            message:
+              "Cannot change the currency of a blanket sale attached to a bill with a different currency. " +
+              "Delete the bill and recreate it with the new currency.",
+          });
+        }
+      }
+    }
+
+    // Stock delta
+    if (quantity !== undefined) {
+      const newQty = parseFloat(quantity);
+      if (!Number.isFinite(newQty) || newQty <= 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "quantity must be a positive number" });
+      }
+      const oldQty = parseFloat(sale.quantity) || 0;
+      const delta = newQty - oldQty;
+
+      if (Math.abs(delta) > 1e-9) {
+        const stock = await bExist.findByPk(sale.bexistId, { transaction: t, lock: true });
+        if (!stock) {
+          await t.rollback();
+          return res.status(400).json({ message: "bExist record not found" });
+        }
+        const available = parseFloat(stock.quantity) || 0;
+
+        if (delta > 0 && available < delta) {
+          await t.rollback();
+          return res.status(400).json({
+            message: `Insufficient stock: only ${available} units available, ${delta} requested.`,
+          });
+        }
+
+        await stock.update(
+          { quantity: Math.round((available - delta) * 100) / 100 },
+          { transaction: t }
+        );
+      }
+
+      sale.quantity = newQty;
+    }
+
+    if (categoryId !== undefined) sale.categoryId = categoryId;
+
+    if (unit_price !== undefined) {
+      const up = parseFloat(unit_price);
+      if (!Number.isFinite(up) || up <= 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "unit_price must be a positive number" });
+      }
+      sale.unit_price = up;
+    }
+
+    if (receipt !== undefined) {
+      const rc = parseFloat(receipt) || 0;
+      if (rc < 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "receipt cannot be negative" });
+      }
+      sale.receipt = rc;
+    }
+
+    if (total !== undefined) {
+      const tVal = parseFloat(total);
+      if (!Number.isFinite(tVal) || tVal <= 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "total must be a positive number" });
+      }
+      sale.total = tVal;
+    } else if (quantity !== undefined || unit_price !== undefined) {
+      sale.total = Math.round((sale.quantity * sale.unit_price) * 100) / 100;
+    }
+
+    // If all three are sent, validate consistency
+    if (quantity !== undefined && unit_price !== undefined && total !== undefined) {
+      const expected = Math.round(sale.quantity * sale.unit_price * 100) / 100;
+      if (Math.abs(sale.total - expected) > 0.01) {
+        await t.rollback();
+        return res.status(400).json({
+          message: `total (${sale.total}) must equal quantity × unit_price (${expected}).`,
+        });
+      }
+    }
+
+    if (remaind !== undefined) {
+      const r = parseFloat(remaind) || 0;
+      if (r < 0) {
+        await t.rollback();
+        return res.status(400).json({ message: "remaind cannot be negative" });
+      }
+      sale.remaind = r;
+    } else if (total !== undefined || receipt !== undefined) {
+      sale.remaind = Math.max(
+        Math.round((parseFloat(sale.total) - parseFloat(sale.receipt)) * 100) / 100,
+        0
+      );
+    }
+
+    // Currency
     if (DV !== undefined) {
       if (DV === null || DV === "") sale.DV = 0;
       else {
         const parsed = parseFloat(DV);
-        if (!Number.isFinite(parsed)) return res.status(400).json({ error: "DV must be a valid number" });
+        if (!Number.isFinite(parsed)) {
+          await t.rollback();
+          return res.status(400).json({ error: "DV must be a valid number" });
+        }
         sale.DV = parsed;
       }
     }
@@ -437,14 +705,19 @@ export const updateBSale = async (req, res) => {
       if (typeof isAfn === "boolean") sale.isAfn = isAfn;
       else if (isAfn === 1 || isAfn === "1" || isAfn === "true") sale.isAfn = true;
       else if (isAfn === 0 || isAfn === "0" || isAfn === "false") sale.isAfn = false;
-      else return res.status(400).json({ error: "isAfn must be a boolean" });
+      else {
+        await t.rollback();
+        return res.status(400).json({ error: "isAfn must be a boolean" });
+      }
     }
 
-    if (unit_price !== undefined || quantity !== undefined) {
-      sale.total = sale.unit_price * sale.quantity;
+    await sale.save({ transaction: t });
+
+    for (const { id: billId } of parentBills) {
+      await syncBillTotals(billId, t);
     }
 
-    await sale.save();
+    await t.commit();
 
     const updated = await BSales.findByPk(id, {
       include: [
@@ -455,26 +728,233 @@ export const updateBSale = async (req, res) => {
     });
     res.status(200).json(updated);
   } catch (error) {
+    if (!t.finished) await t.rollback();
     res.status(500).json({ error: error.message });
   }
 };
 
 // ─── DELETE ──────────────────────────────────────────────────────────────
 export const deleteBSale = async (req, res) => {
+  const t = await sequelize.transaction();
   try {
     const { id } = req.params;
-    const sale = await BSales.findByPk(id);
-    if (!sale) return res.status(404).json({ message: "BSale not found" });
-
-    const stock = await bExist.findByPk(sale.bexistId);
-    if (stock) {
-      const newQty = parseFloat(stock.quantity) + parseFloat(sale.quantity);
-      await stock.update({ quantity: newQty });
+    const sale = await BSales.findByPk(id, { transaction: t });
+    if (!sale) {
+      await t.rollback();
+      return res.status(404).json({ message: "BSale not found" });
     }
 
-    await sale.destroy();
+    const parentBills = await findBillsForSell(sale.id, t);
+
+    const stock = await bExist.findByPk(sale.bexistId, { transaction: t, lock: true });
+    if (stock) {
+      const restored = (parseFloat(stock.quantity) || 0) + (parseFloat(sale.quantity) || 0);
+      await stock.update(
+        { quantity: Math.round(restored * 100) / 100 },
+        { transaction: t }
+      );
+    } else {
+      console.warn(
+        `deleteBSale: bExist ${sale.bexistId} not found while deleting BSale ${sale.id}; stock restore skipped.`
+      );
+    }
+
+    await sale.destroy({ transaction: t });
+
+    for (const { id: billId } of parentBills) {
+      await syncBillTotals(billId, t);
+    }
+
+    await t.commit();
     res.status(200).json({ message: "BSale deleted successfully and stock restored" });
   } catch (error) {
+    if (!t.finished) await t.rollback();
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ========== BATCH UPDATE BSALES (single transaction) ==========
+// PUT /bsales/batch
+// Body: { items: [{ bsaleId, bexistId?, quantity?, unit_price?, total?, receipt?, remaind?, DV? }] }
+// All rows must be updated atomically. Syncs parent bills once at the end.
+export const updateBSaleBatch = async (req, res) => {
+  const t = await sequelize.transaction();
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      await t.rollback();
+      return res.status(400).json({ message: "items must be a non-empty array" });
+    }
+
+    const touchedBillIds = new Set();
+    const updatedIds = [];
+
+    for (const item of items) {
+      const { bsaleId, bexistId, quantity, unit_price, total, receipt, remaind, DV, isAfn } = item;
+
+      if (!bsaleId) {
+        await t.rollback();
+        return res.status(400).json({ message: "Each item must have bsaleId" });
+      }
+
+      const sale = await BSales.findByPk(bsaleId, { transaction: t, lock: true });
+      if (!sale) {
+        await t.rollback();
+        return res.status(404).json({ message: `BSale ${bsaleId} not found` });
+      }
+
+      // bexistId change: reject
+      if (bexistId !== undefined && parseInt(bexistId) !== parseInt(sale.bexistId)) {
+        await t.rollback();
+        return res.status(400).json({
+          message: `Changing bexistId is not allowed (BSale ${bsaleId}).`,
+        });
+      }
+
+      const parentBills = await findBillsForSell(sale.id, t);
+      const isOnBill = parentBills.length > 0;
+
+      // Currency guard: only fire on ACTUAL change
+      if (isAfn !== undefined && isOnBill) {
+        let nextIsAfn;
+        if (typeof isAfn === "boolean") nextIsAfn = isAfn;
+        else if (isAfn === 1 || isAfn === "1" || isAfn === "true") nextIsAfn = true;
+        else if (isAfn === 0 || isAfn === "0" || isAfn === "false") nextIsAfn = false;
+        else {
+          await t.rollback();
+          return res.status(400).json({ message: `Invalid isAfn for BSale ${bsaleId}` });
+        }
+        const currentIsAfn = !!sale.isAfn;
+        if (nextIsAfn !== currentIsAfn) {
+          const billRow = await Bill.findByPk(parentBills[0].id, { transaction: t });
+          if (billRow && !!billRow.isAfn !== nextIsAfn) {
+            await t.rollback();
+            return res.status(400).json({
+              message: `Cannot change the currency of BSale ${bsaleId} — it is attached to a bill with a different currency.`,
+            });
+          }
+        }
+      }
+
+      // Stock delta
+      if (quantity !== undefined) {
+        const newQty = parseFloat(quantity);
+        if (!Number.isFinite(newQty) || newQty <= 0) {
+          await t.rollback();
+          return res.status(400).json({ message: `quantity must be positive (BSale ${bsaleId})` });
+        }
+        const oldQty = parseFloat(sale.quantity) || 0;
+        const delta = newQty - oldQty;
+
+        if (Math.abs(delta) > 1e-9) {
+          const stock = await bExist.findByPk(sale.bexistId, { transaction: t, lock: true });
+          if (!stock) {
+            await t.rollback();
+            return res.status(400).json({ message: `bExist not found for BSale ${bsaleId}` });
+          }
+          const available = parseFloat(stock.quantity) || 0;
+
+          if (delta > 0 && available < delta) {
+            await t.rollback();
+            return res.status(400).json({
+              message: `Insufficient stock for BSale ${bsaleId}: only ${available} available, ${delta} requested.`,
+            });
+          }
+
+          await stock.update(
+            { quantity: Math.round((available - delta) * 100) / 100 },
+            { transaction: t }
+          );
+        }
+        sale.quantity = newQty;
+      }
+
+      if (unit_price !== undefined) {
+        const up = parseFloat(unit_price);
+        if (!Number.isFinite(up) || up <= 0) {
+          await t.rollback();
+          return res.status(400).json({ message: `unit_price must be positive (BSale ${bsaleId})` });
+        }
+        sale.unit_price = up;
+      }
+
+      if (receipt !== undefined) {
+        const rc = parseFloat(receipt) || 0;
+        if (rc < 0) {
+          await t.rollback();
+          return res.status(400).json({ message: `receipt cannot be negative (BSale ${bsaleId})` });
+        }
+        sale.receipt = rc;
+      }
+
+      if (total !== undefined) {
+        const tVal = parseFloat(total);
+        if (!Number.isFinite(tVal) || tVal <= 0) {
+          await t.rollback();
+          return res.status(400).json({ message: `total must be positive (BSale ${bsaleId})` });
+        }
+        sale.total = tVal;
+      } else if (quantity !== undefined || unit_price !== undefined) {
+        sale.total = Math.round((sale.quantity * sale.unit_price) * 100) / 100;
+      }
+
+      if (remaind !== undefined) {
+        const r = parseFloat(remaind) || 0;
+        if (r < 0) {
+          await t.rollback();
+          return res.status(400).json({ message: `remaind cannot be negative (BSale ${bsaleId})` });
+        }
+        sale.remaind = r;
+      } else if (total !== undefined || receipt !== undefined) {
+        sale.remaind = Math.max(
+          Math.round((parseFloat(sale.total) - parseFloat(sale.receipt)) * 100) / 100,
+          0
+        );
+      }
+
+      if (DV !== undefined) {
+        if (DV === null || DV === "") sale.DV = 0;
+        else {
+          const parsed = parseFloat(DV);
+          if (!Number.isFinite(parsed)) {
+            await t.rollback();
+            return res.status(400).json({ message: `DV must be a valid number (BSale ${bsaleId})` });
+          }
+          sale.DV = parsed;
+        }
+      }
+
+      await sale.save({ transaction: t });
+      updatedIds.push(sale.id);
+
+      // Collect bill ids to sync later (one sync per bill, at the end)
+      parentBills.forEach((b) => touchedBillIds.add(b.id));
+    }
+
+    // ✅ Sync all touched bills ONCE, inside the same transaction
+    for (const billId of touchedBillIds) {
+      await syncBillTotals(billId, t);
+    }
+
+    await t.commit();
+
+    const updated = await BSales.findAll({
+      where: { id: updatedIds },
+      include: [
+        { model: Category, as: "category" },
+        { model: bExist, as: "bExist" },
+        { model: Buyer, as: "buyer" },
+      ],
+    });
+
+    res.status(200).json({
+      message: `${updated.length} BSale(s) updated`,
+      bsales: updated,
+      syncedBillIds: Array.from(touchedBillIds),
+    });
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    console.error("Error in updateBSaleBatch:", error);
     res.status(500).json({ error: error.message });
   }
 };

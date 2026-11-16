@@ -25,6 +25,7 @@ import bIncomeRoute from "./routes/Stock/bincomeRoute.js";
 import bExistRoute from "./routes/Stock/bExistRoute.js";
 import bsalesRouter from "./routes/Stock/BSalesRoute.js";
 import { runBackfillBincomeInitialAmount } from "./Controllers/stock/bIncomeController.js";
+import incomeBillRouter from "./routes/bill/incomeBillRouter.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -86,6 +87,7 @@ app.use("/buyer", BuyerRoute);
 app.use("/buyeraccount", BuyerAccountRoute);
 app.use("/receipt", ReceiptRoute);
 app.use("/bill", BillRouter);
+app.use("/incomebill", incomeBillRouter);
 app.use("/pay", PayRouter);
 app.use("/customeraccount", CustomeraccountRoute);
 app.use("/other-incomes", otherIncomeRouter);

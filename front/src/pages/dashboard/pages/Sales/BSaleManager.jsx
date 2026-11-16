@@ -1,5 +1,5 @@
 // components/stock/BSaleManager.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { FaPlus, FaEdit, FaTrash, FaSpinner, FaTimes } from "react-icons/fa";
 import Pagination from "../../pagination/Pagination";
@@ -7,8 +7,8 @@ import BSaleForm from "./BSaleForm";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const BSALES_API = `${BASE_URL}/bsales`;
+const BILL_API = `${BASE_URL}/bill`;
 
-// ✅ currency helpers
 const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
 const currencyLabel = (isAfn) => (isAfn ? "افغانی" : "دالر");
 
@@ -17,8 +17,11 @@ const BSaleManager = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editingData, setEditingData] = useState(null);
+
+  // ✅ Edit state — array of BSale rows + bill meta
+  const [editingBSales, setEditingBSales] = useState(null);
+  const [editingMeta, setEditingMeta] = useState(null);
+  const [loadingEdit, setLoadingEdit] = useState(false);
 
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
@@ -51,39 +54,85 @@ const BSaleManager = () => {
 
   const handleFormSuccess = () => {
     setShowForm(false);
-    setEditingId(null);
-    setEditingData(null);
+    setEditingBSales(null);
+    setEditingMeta(null);
     fetchSales(page, limit);
   };
 
   const handleFormCancel = () => {
     setShowForm(false);
-    setEditingId(null);
-    setEditingData(null);
+    setEditingBSales(null);
+    setEditingMeta(null);
   };
 
   const handleAddNew = () => {
-    setEditingId(null);
-    setEditingData(null);
+    setEditingBSales(null);
+    setEditingMeta(null);
     setShowForm(true);
   };
 
-  const handleEdit = (sale) => {
-    setEditingId(sale.id);
-    setEditingData([
-      {
-        typeId: sale.category?.typeId || "",
-        categoryId: sale.categoryId,
-        bexistId: sale.bexistId,
-        quantity: sale.quantity,
-        unitPrice: sale.unit_price,
-        total: sale.total,
-        // ✅ include currency
-        isAfn: !!sale.isAfn,
-        DV: sale.DV ?? 65,
-      },
-    ]);
-    setShowForm(true);
+  // ✅ Edit: load the full bill details so we get ALL bsales + bill meta.
+  // We use GET /bill/:id/details for consistency with SellManager.
+  const handleEdit = async (sale) => {
+    try {
+      setLoadingEdit(true);
+      setError("");
+
+      // The row in the table has bill info implicitly. If it doesn't,
+      // fall back to a per-row fetch + resolve parent bill via /bsales/by-bill/:id.
+      // Most BSales queries include `id` from the sale row.
+      // Strategy: fetch the parent bill via the by-bill endpoint if sale.billId is present,
+      // otherwise fetch the single bsale and use its parentBill discovery.
+      let details = null;
+
+      // If the row already carries the billId (from a custom backend field), use it.
+      if (sale.billId) {
+        const res = await axios.get(`${BILL_API}/${sale.billId}/details`);
+        details = res.data;
+      } else {
+        // Fallback: fetch the bsale row directly (single-row edit)
+        const res = await axios.get(`${BSALES_API}/${sale.id}`);
+        const bsale = res.data;
+
+        // Build a minimal "details" shape matching /bill/:id/details
+        details = {
+          id: null,
+          billNumber: null,
+          buyerId: bsale.buyerId,
+          buyer: bsale.buyer,
+          isAfn: !!bsale.isAfn,
+          DV: bsale.DV != null ? parseFloat(bsale.DV) : 65,
+          bsaleRecords: [bsale],
+          sellRecords: [],
+        };
+      }
+
+      const allBSales = Array.isArray(details.bsaleRecords)
+        ? details.bsaleRecords
+        : [];
+
+      if (allBSales.length === 0) {
+        setError("این فاکتور هیچ فروش بلنکتی ندارد.");
+        return;
+      }
+
+      setEditingBSales(allBSales);
+      setEditingMeta({
+        billId: details.id,
+        billNumber: details.billNumber,
+        buyerId: details.buyerId,
+        buyerName: details.buyer?.fullname || null,
+        isAfn: !!details.isAfn,
+        DV: details.DV != null ? parseFloat(details.DV) : 65,
+      });
+
+      setShowForm(true);
+    } catch (err) {
+      setError(err.response?.data?.message || "بارگیری داده‌های ویرایش ناکام ماند");
+      console.error(err);
+    } finally {
+      setLoadingEdit(false);
+    }
   };
 
   const handleDelete = async (id) => {
@@ -106,6 +155,44 @@ const BSaleManager = () => {
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= totalPages) setPage(newPage);
   };
+
+  // ✅ Build initialEntries (one per row) — same shape as SellForm's
+  const bsaleInitialEntries = useMemo(() => {
+    if (!editingBSales || editingBSales.length === 0) {
+      return [
+        {
+          typeId: "",
+          categoryId: "",
+          bexistId: "",
+          quantity: "",
+          unitPrice: "",
+          total: "",
+          isAfn: false,
+          DV: 65,
+          receipt: 0,
+          remaind: 0,
+        },
+      ];
+    }
+    return editingBSales.map((b) => ({
+      bsaleId: b.id,
+      typeId: b.category?.typeId ?? b.categoryDetail?.typeId ?? "",
+      categoryId: b.categoryId || "",
+      bexistId: b.bexistId || "",
+      quantity: b.quantity ?? "",
+      unitPrice: b.unit_price ?? "",
+      total: b.total ?? "",
+      isAfn: !!b.isAfn,
+      DV: b.DV ?? 65,
+      receipt: b.receipt ?? 0,
+      remaind: b.remaind ?? 0,
+    }));
+  }, [editingBSales]);
+
+  const editKey =
+    editingBSales && editingBSales.length
+      ? `edit-bsales-${editingBSales.map((b) => b.id).join("-")}`
+      : "new";
 
   return (
     <div className="bg-gradient-to-br from-gray-50 to-blue-50 p-6 rounded-xl shadow-lg border border-gray-100 mt-8" dir="rtl">
@@ -145,10 +232,14 @@ const BSaleManager = () => {
 
       {showForm && (
         <BSaleForm
-          editingId={editingId}
-          initialEntries={editingData}
+          key={editKey}
           onSuccess={handleFormSuccess}
           onCancel={handleFormCancel}
+          editingId={editingBSales?.[0]?.id ?? null}
+          editingIds={editingBSales ? editingBSales.map((b) => b.id) : null}
+          editingData={editingBSales}
+          editingMeta={editingMeta}
+          initialEntries={bsaleInitialEntries}
         />
       )}
 
@@ -166,10 +257,10 @@ const BSaleManager = () => {
                 <p className="text-sm text-white/80">مدیریت تمام فروش‌های ثبت شده</p>
               </div>
             </div>
-            {loading && (
+            {(loading || loadingEdit) && (
               <div className="flex items-center gap-2 text-sm bg-white/20 px-3 py-1 rounded-full">
                 <FaSpinner className="animate-spin" />
-                در حال بارگذاری...
+                {loadingEdit ? "در حال بارگیری ویرایش..." : "در حال بارگذاری..."}
               </div>
             )}
           </div>
@@ -201,7 +292,6 @@ const BSaleManager = () => {
                     <th className="p-3 border-b font-semibold">موجودی</th>
                     <th className="p-3 border-b font-semibold">تعداد</th>
                     <th className="p-3 border-b font-semibold">قیمت واحد</th>
-                    {/* ✅ currency + DV columns */}
                     <th className="p-3 border-b font-semibold">واحد</th>
                     <th className="p-3 border-b font-semibold">نرخ دالر</th>
                     <th className="p-3 border-b font-semibold">جمع کل</th>
@@ -219,7 +309,6 @@ const BSaleManager = () => {
                       <td className="p-3">{item.bExist?.id || item.bexistId}</td>
                       <td className="p-3">{item.quantity}</td>
                       <td className="p-3">{item.unit_price}</td>
-                      {/* ✅ currency badge */}
                       <td className="p-3">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
                           item.isAfn ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
