@@ -2,7 +2,7 @@ import express from "express";
 import {
   getAllBills,
   getBillById,
-  getBillDetails,              // 👈 new import
+  getBillDetails,
   getBillsByDateRange,
   getBillsByCustomer,
   getFilteredBills,
@@ -11,14 +11,14 @@ import {
 
 const BillRouter = express.Router();
 
-// ─── Static / specific routes first ───
+// ─── Static / specific routes FIRST ───
 BillRouter.get("/filter", getFilteredBills);
 BillRouter.get("/date-range", getBillsByDateRange);
 BillRouter.get("/customers/:customerId/bills", getBillsByCustomer);
 BillRouter.get("", getAllBills);
 
-// ─── Parameterized routes (specific suffix BEFORE bare :id) ───
-BillRouter.get("/:id/details", getBillDetails);   // 👈 new route
+// ─── Parameterized routes LAST ───
+BillRouter.get("/:id/details", getBillDetails);
 BillRouter.get("/:id", getBillById);
 BillRouter.delete("/:id", deleteBill);
 

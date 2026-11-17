@@ -13,6 +13,7 @@ import {
 } from "react-icons/fa";
 import Pagination from "../../../pagination/Pagination";
 import IncomeBillDetailsModal from "./IncomeBillDetailsModal";
+import IncomeBillDateDownload from "../../report/IncomeBillDateDownload";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE = `${BASE_URL}/incomebill`;
@@ -201,6 +202,10 @@ const IncomeBillManager = () => {
                   {totalItems} فاکتور ثبت شده
                 </p>
               </div>
+              <div>
+                <IncomeBillDateDownload/>
+               
+              </div>
             </div>
             {loading && (
               <div className="flex items-center gap-2 text-sm bg-white/20 px-3 py-1 rounded-full">
@@ -254,11 +259,10 @@ const IncomeBillManager = () => {
                       </td>
                       <td className="p-3">
                         <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                            bill.isAfn
+                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${bill.isAfn
                               ? "bg-amber-100 text-amber-800"
                               : "bg-emerald-100 text-emerald-800"
-                          }`}
+                            }`}
                         >
                           {symbolFor(bill.isAfn)}{" "}
                           {currencyLabel(bill.isAfn)}

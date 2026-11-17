@@ -2,9 +2,10 @@ import sequelize from "../../dbconnection.js";
 import { Customer } from "../../Models/index.js";
 import Exist from "../../Models/Stock/exist.js";
 import { Op } from "sequelize";
-import { Bill, Buyer, Sells, Category, Income, Type } from "../../Models/index.js"; // ensure Sells is imported
+import {Buyer, Sells, Category, Income, Type } from "../../Models/index.js"; // ensure Sells is imported
 import {  bExist} from "../../Models/index.js";
 import {BSales} from "../../Models/index.js";
+import {Bill} from "../../Models/index.js";
 // ========== GET BILL DETAILS (bill + sells + bsales) ==========
 // GET /bill/:id/details
 // One request returns the bill and both child arrays with full includes.
@@ -309,64 +310,105 @@ export const getBillById = async (req, res) => {
 /* ===============================
    GET BILLS BY DATE RANGE
 ================================ */
+
 export const getBillsByDateRange = async (req, res) => {
-  const { from, to, customerId } = req.query;
-  if (!from || !to) {
-    return res.status(400).json({ success: false, message: "from and to dates are required" });
-  }
-
   try {
-    const startDate = new Date(`${from}T00:00:00`);
-    const endDate = new Date(`${to}T23:59:59`);
+    const { from, to } = req.query;
 
-    const whereClause = {
-      date: { [Op.between]: [startDate, endDate] },
-    };
-    if (customerId) {
-      whereClause.customerId = customerId;
+    // ── Validate presence ──
+    if (!from || !to) {
+      return res.status(400).json({
+        success: false,
+        message: "Both 'from' and 'to' query parameters are required (YYYY-MM-DD).",
+      });
     }
 
+    // ── Parse & validate dates ──
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date format. Use YYYY-MM-DD.",
+      });
+    }
+
+    if (fromDate > toDate) {
+      return res.status(400).json({
+        success: false,
+        message: "'from' date cannot be after 'to' date.",
+      });
+    }
+
+    // ── Make 'to' inclusive of the whole day ──
+    const toDateEnd = new Date(toDate);
+    toDateEnd.setHours(23, 59, 59, 999);
+
+    // ── Query (Sequelize) ──
     const bills = await Bill.findAll({
-      where: whereClause,
+      where: {
+        createdAt: {
+          [Op.gte]: fromDate,
+          [Op.lte]: toDateEnd,
+        },
+      },
       include: [
         {
-          model: Customer,
-          as: "customer",
+          model: Buyer,
+          as: "buyer",
           attributes: ["id", "fullname", "phoneNumber"],
         },
-        {
-          model: Sells,
-          as: "items",
-          include: [
-            {
-              model: StockExist,
-              as: "product",
-              attributes: ["id", "name"],
-            },
-          ],
-        },
       ],
-      order: [["date", "DESC"]],
+      attributes: [
+        "id", "billNumber", "buyerId", "date", "totalAmount", "paidAmount",
+        "remainingAmount", "status", "notes", "discount_percent", "discounted_amount",
+        "sells", "bsales", "createdAt", "updatedAt", "DV", "isAfn"
+      ],
+      order: [["createdAt", "DESC"]],
     });
 
-    const totalBilled = bills.reduce((sum, b) => sum + parseFloat(b.totalAmount), 0);
-    const totalPaid = bills.reduce((sum, b) => sum + parseFloat(b.paidAmount), 0);
-    const totalRemaining = totalBilled - totalPaid;
+    // ── Attach sell records (same pattern as getAllBills) ──
+    const allSellIds = new Set();
+    for (const bill of bills) {
+      const ids = bill.sells || [];
+      ids.forEach((id) => allSellIds.add(id));
+    }
 
-    res.json({
+    const sellsMap = new Map();
+    if (allSellIds.size > 0) {
+      const sells = await Sells.findAll({
+        where: { id: Array.from(allSellIds) },
+        include: [
+          { model: Category, as: "categoryDetail" },
+          { model: Income, as: "income" },
+          { model: Buyer, as: "buyer" },
+        ],
+      });
+      sells.forEach((sell) => sellsMap.set(sell.id, sell));
+    }
+
+    const billsWithSells = bills.map((bill) => {
+      const billJson = bill.toJSON();
+      const ids = bill.sells || [];
+      billJson.sellRecords = ids.map((id) => sellsMap.get(id)).filter(Boolean);
+      return billJson;
+    });
+
+    return res.status(200).json({
       success: true,
-      bills,
-      summary: {
-        totalBills: bills.length,
-        totalAmount: totalBilled,
-        totalPaid,
-        totalRemaining,
-      },
-      filters: { from, to, customerId: customerId || null },
+      count: billsWithSells.length,
+      from: fromDate.toISOString(),
+      to: toDateEnd.toISOString(),
+      data: billsWithSells,
     });
   } catch (error) {
-    console.error("Error in getBillsByDateRange:", error);
-    res.status(500).json({ success: false, message: "Error fetching bills", error: error.message });
+    console.error("getBillsByDateRange error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching bills by date range.",
+      error: error.message,
+    });
   }
 };
 

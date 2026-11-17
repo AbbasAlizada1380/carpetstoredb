@@ -605,3 +605,131 @@ export const deleteIncomeBill = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+// ======================= GET BY DATE RANGE (for reports) =======================
+export const getIncomeBillsByDateRange = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+
+        if (!from || !to) {
+            return res.status(400).json({
+                message: "Both 'from' and 'to' query params are required (YYYY-MM-DD)",
+            });
+        }
+
+        // ── Parse dates ──
+        const fromDate = new Date(from);
+        const toDate = new Date(to);
+
+        if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+            return res.status(400).json({
+                message: "Invalid date format. Use YYYY-MM-DD",
+            });
+        }
+        if (fromDate > toDate) {
+            return res.status(400).json({
+                message: "'from' date must be before or equal to 'to' date",
+            });
+        }
+
+        // Inclusive boundaries (start of `from` day → end of `to` day)
+        fromDate.setUTCHours(0, 0, 0, 0);
+        toDate.setUTCHours(23, 59, 59, 999);
+
+        // ── Optional filters ──
+        const where = {
+            createdAt: {
+                [Op.gte]: fromDate,
+                [Op.lte]: toDate,
+            },
+        };
+
+        if (req.query.status) {
+            where.status = req.query.status;
+        }
+        if (req.query.isAfn !== undefined && req.query.isAfn !== "") {
+            try {
+                where.isAfn = coerceBoolean(req.query.isAfn);
+            } catch (err) {
+                return res.status(400).json({ message: err.message });
+            }
+        }
+        if (req.query.customerId) {
+            where.customerId = req.query.customerId;
+        }
+
+        // ── Fetch all matching bills (no pagination for reports) ──
+        const bills = await IncomeBill.findAll({
+            where,
+            include: [
+                {
+                    model: Customer,
+                    as: "customer",
+                    attributes: ["id", "fullname"],
+                },
+            ],
+            order: [["createdAt", "DESC"]],
+        });
+
+        // ── Split by currency + compute totals ──
+        const afnBills = bills.filter((b) => b.isAfn === true);
+        const usdBills = bills.filter((b) => b.isAfn !== true);
+
+        const sumAmounts = (list, field) =>
+            list.reduce((s, b) => s + (parseFloat(b[field]) || 0), 0);
+
+        const totals = {
+            afn: {
+                count: afnBills.length,
+                totalAmount: Math.round(sumAmounts(afnBills, "totalAmount") * 100) / 100,
+                paidAmount: Math.round(sumAmounts(afnBills, "paidAmount") * 100) / 100,
+                remainingAmount: Math.round(sumAmounts(afnBills, "remainingAmount") * 100) / 100,
+                discountedAmount: Math.round(sumAmounts(afnBills, "discounted_amount") * 100) / 100,
+            },
+            usd: {
+                count: usdBills.length,
+                totalAmount: Math.round(sumAmounts(usdBills, "totalAmount") * 100) / 100,
+                paidAmount: Math.round(sumAmounts(usdBills, "paidAmount") * 100) / 100,
+                remainingAmount: Math.round(sumAmounts(usdBills, "remainingAmount") * 100) / 100,
+                discountedAmount: Math.round(sumAmounts(usdBills, "discounted_amount") * 100) / 100,
+            },
+        };
+
+        // ── Status breakdown (per currency) ──
+        const statusBreakdown = (list) =>
+            list.reduce(
+                (acc, b) => {
+                    acc[b.status] = (acc[b.status] || 0) + 1;
+                    return acc;
+                },
+                { paid: 0, partial: 0, unpaid: 0 }
+            );
+
+        const breakdown = {
+            afn: statusBreakdown(afnBills),
+            usd: statusBreakdown(usdBills),
+        };
+
+        // ── Summary ──
+        const overall = {
+            totalBills: bills.length,
+            totalAfn: afnBills.length,
+            totalUsd: usdBills.length,
+        };
+
+        res.status(200).json({
+            success: true,
+            range: {
+                from: fromDate.toISOString().slice(0, 10),
+                to: toDate.toISOString().slice(0, 10),
+            },
+            bills,
+            totals,
+            breakdown,
+            overall,
+        });
+    } catch (error) {
+        console.error("Error in getIncomeBillsByDateRange:", error);
+        res.status(500).json({ error: error.message });
+    }
+};

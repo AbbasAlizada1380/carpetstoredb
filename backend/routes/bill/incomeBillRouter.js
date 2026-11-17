@@ -4,6 +4,7 @@ import {
   getAllIncomeBills,
   getIncomeBillById,
   getIncomeBillsByCustomer,
+  getIncomeBillsByDateRange,   // ← add
   updateIncomeBill,
   deleteIncomeBill,
 } from "../../Controllers/bill/incomeBillController.js";
@@ -15,6 +16,7 @@ incomeBillRouter.get("/", getAllIncomeBills);
 
 // ⚠️ Specific routes BEFORE "/:id"
 incomeBillRouter.get("/by-customer/:customerId", getIncomeBillsByCustomer);
+incomeBillRouter.get("/date_range", getIncomeBillsByDateRange);   // ← add
 
 incomeBillRouter.get("/:id", getIncomeBillById);
 incomeBillRouter.put("/:id", updateIncomeBill);
