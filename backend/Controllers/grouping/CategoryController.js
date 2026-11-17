@@ -232,10 +232,8 @@ export const getIncomesByCategory = async (req, res) => {
 
 
 
-
 export const getCategoryReports = async (req, res) => {
   try {
-    // 1. Fetch all categories with their associated Type
     const categories = await Category.findAll({
       include: [
         {
@@ -248,23 +246,26 @@ export const getCategoryReports = async (req, res) => {
     });
 
     if (!categories.length) {
-      return res.status(200).json({ categories: [], totalStockValue: 0 });
+      return res.status(200).json({
+        categories: [],
+        totalStockValue: 0,
+        totals: { afn: 0, usd: 0, afnEquivalent: 0 },
+      });
     }
 
-    // 2. Process only categories that have at least one existing income (EIncome not empty)
     const reports = await Promise.all(
       categories
-        .filter(category => {
-          const eIncome = Array.isArray(category.EIncome) ? category.EIncome : [];
+        .filter((category) => {
+          const eIncome = Array.isArray(category.EIncome)
+            ? category.EIncome
+            : [];
           return eIncome.length > 0;
         })
         .map(async (category) => {
-          // Extract existing income IDs (EIncome)
           const existingIds = Array.isArray(category.EIncome)
-            ? category.EIncome.map(id => Number(id))
+            ? category.EIncome.map((id) => Number(id))
             : [];
 
-          // Fetch full Income objects for those IDs
           let existingIncomes = [];
           if (existingIds.length) {
             existingIncomes = await Income.findAll({
@@ -273,37 +274,67 @@ export const getCategoryReports = async (req, res) => {
             });
           }
 
-          // Calculate total stock value for this category: sum of unit_price * area
-          const categoryStockValue = existingIncomes.reduce((sum, income) => {
-            const price = income.unit_price || 0;
-            const area = income.area || 0;
-            return sum + (price * area);
-          }, 0);
+          // ─── Sum stock value per currency + AFN-equivalent ─────────
+          let afnStockValue = 0;
+          let usdStockValue = 0;
+          let afnEquiv = 0;
 
-          // Return category report with stock value summary
+          for (const income of existingIncomes) {
+            const price = parseFloat(income.unit_price) || 0;
+            const area = parseFloat(income.area) || 0;
+            const rowValue = price * area;
+
+            const isAfn = !!income.isAfn;
+            const dv = parseFloat(income.DV) > 0 ? parseFloat(income.DV) : 65;
+
+            if (isAfn) {
+              afnStockValue += rowValue;
+              afnEquiv += rowValue; // already in AFN
+            } else {
+              usdStockValue += rowValue;
+              afnEquiv += rowValue * dv; // USD → AFN using this row's DV
+            }
+          }
+
+          const categoryAfn = Math.round(afnStockValue * 100) / 100;
+          const categoryUsd = Math.round(usdStockValue * 100) / 100;
+          const categoryAfnEquiv = Math.round(afnEquiv * 100) / 100;
+
           return {
             id: category.id,
             name: category.name,
             type: category.type || null,
-            existingIncomes,
+            existingIncomes: existingIncomes.map((i) => i.toJSON()),
             summary: {
               totalExistingIncomes: existingIncomes.length,
-              totalStockValue: categoryStockValue,   // new per‑category total
+              stockValueAfn: categoryAfn,
+              stockValueUsd: categoryUsd,
+              stockValueAfnEquivalent: categoryAfnEquiv,
+              // Legacy field — now = AFN-equivalent
+              totalStockValue: categoryAfnEquiv,
             },
           };
         })
     );
 
-    // 3. Calculate overall total stock value across all categories
-    const overallTotalStockValue = reports.reduce(
-      (total, categoryReport) => total + (categoryReport.summary.totalStockValue || 0),
-      0
-    );
+    let grandAfn = 0;
+    let grandUsd = 0;
+    let grandAfnEquiv = 0;
 
-    // 4. Send response with categories array and grand total
+    for (const r of reports) {
+      grandAfn += r.summary.stockValueAfn || 0;
+      grandUsd += r.summary.stockValueUsd || 0;
+      grandAfnEquiv += r.summary.stockValueAfnEquivalent || 0;
+    }
+
     res.status(200).json({
       categories: reports,
-      totalStockValue: overallTotalStockValue,
+      totalStockValue: Math.round(grandAfnEquiv * 100) / 100,
+      totals: {
+        afn: Math.round(grandAfn * 100) / 100,
+        usd: Math.round(grandUsd * 100) / 100,
+        afnEquivalent: Math.round(grandAfnEquiv * 100) / 100,
+      },
     });
   } catch (error) {
     console.error("Error in getCategoryReports:", error);

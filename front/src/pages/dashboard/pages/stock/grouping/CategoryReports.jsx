@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from "react";
 import CategoryReportsDownload from "../../report/CategoryReportsDownload";
 
+const symbolFor = (isAfn) => (isAfn ? "؋" : "$");
+const currencyLabel = (isAfn) => (isAfn ? "افغانی" : "دالر");
+
 const CategoryReports = () => {
   const [categories, setCategories] = useState([]);
-  const [carpetTotalValue, setCarpetTotalValue] = useState(0);
+  // ✅ NEW: per-currency grand totals
+  const [carpetTotals, setCarpetTotals] = useState({
+    afn: 0,
+    usd: 0,
+    afnEquivalent: 0,
+  });
 
   const [blanketStock, setBlanketStock] = useState([]);
   const [blanketTotalValue, setBlanketTotalValue] = useState(0);
@@ -18,7 +26,7 @@ const CategoryReports = () => {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
 
-  // ─── Blanket edit state (separate so they don't collide) ───
+  // ─── Blanket edit state ───
   const [blanketEditingId, setBlanketEditingId] = useState(null);
   const [blanketEditForm, setBlanketEditForm] = useState({});
   const [blanketSaving, setBlanketSaving] = useState(false);
@@ -33,8 +41,10 @@ const CategoryReports = () => {
         fetch(`${BASE_URL}/bexist?limit=1000`),
       ]);
 
-      if (!carpetRes.ok) throw new Error(`Carpet reports HTTP error! status: ${carpetRes.status}`);
-      if (!blanketRes.ok) throw new Error(`Blanket stock HTTP error! status: ${blanketRes.status}`);
+      if (!carpetRes.ok)
+        throw new Error(`Carpet reports HTTP error! status: ${carpetRes.status}`);
+      if (!blanketRes.ok)
+        throw new Error(`Blanket stock HTTP error! status: ${blanketRes.status}`);
 
       const carpetData = await carpetRes.json();
       const blanketData = await blanketRes.json();
@@ -42,17 +52,38 @@ const CategoryReports = () => {
       // ─── Process Carpet Data ───
       if (carpetData && typeof carpetData === "object" && !Array.isArray(carpetData)) {
         setCategories(carpetData.categories || []);
-        setCarpetTotalValue(carpetData.totalStockValue ?? 0);
+
+        // ✅ Prefer the new `totals` object; fall back to computing per-currency
+        if (carpetData.totals) {
+          setCarpetTotals({
+            afn: carpetData.totals.afn ?? 0,
+            usd: carpetData.totals.usd ?? 0,
+            afnEquivalent: carpetData.totals.afnEquivalent ?? 0,
+          });
+        } else {
+          // Legacy response: only totalStockValue available
+          setCarpetTotals({
+            afn: 0,
+            usd: 0,
+            afnEquivalent: carpetData.totalStockValue ?? 0,
+          });
+        }
       } else if (Array.isArray(carpetData)) {
         setCategories(carpetData);
-        const computedTotal = carpetData.reduce(
-          (sum, cat) => sum + (cat.summary?.totalStockValue || 0),
-          0
+        // Sum per-currency from category summaries
+        const totals = carpetData.reduce(
+          (acc, cat) => {
+            acc.afn += cat.summary?.stockValueAfn || 0;
+            acc.usd += cat.summary?.stockValueUsd || 0;
+            acc.afnEquivalent += cat.summary?.stockValueAfnEquivalent || 0;
+            return acc;
+          },
+          { afn: 0, usd: 0, afnEquivalent: 0 }
         );
-        setCarpetTotalValue(computedTotal);
+        setCarpetTotals(totals);
       } else {
         setCategories([]);
-        setCarpetTotalValue(0);
+        setCarpetTotals({ afn: 0, usd: 0, afnEquivalent: 0 });
       }
 
       // ─── Process Blanket Stock Data ───
@@ -74,9 +105,10 @@ const CategoryReports = () => {
 
   useEffect(() => {
     fetchReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Start editing a carpet roll ───
+  // ─── Carpet edit handlers ───
   const startEdit = (inc) => {
     setEditingId(inc.id);
     setEditForm({
@@ -113,7 +145,6 @@ const CategoryReports = () => {
     });
   };
 
-  // ─── Save the edited carpet roll ───
   const handleSave = async (incId) => {
     const len = parseFloat(editForm.length);
     const wid = parseFloat(editForm.width);
@@ -161,13 +192,12 @@ const CategoryReports = () => {
     }
   };
 
-  // ─── Blanket edit handlers ───
+  // ─── Blanket edit handlers (unchanged) ───
   const startBlanketEdit = (item) => {
     setBlanketEditingId(item.id);
     setBlanketEditForm({
       quantity: item.quantity ?? "",
       unitPrice: item.unitPrice ?? "",
-      // add more fields here if your /bexist update endpoint accepts them
     });
     setBlanketEditError("");
   };
@@ -194,13 +224,8 @@ const CategoryReports = () => {
     setBlanketSaving(true);
     setBlanketEditError("");
     try {
-      const payload = {
-        quantity: qty,
-        unitPrice: price,
-        // add categoryId etc. here if your API needs them
-      };
+      const payload = { quantity: qty, unitPrice: price };
 
-      // ⚠️ Adjust this URL to match your blanket update endpoint
       const res = await fetch(`${BASE_URL}/bexist/${itemId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -244,50 +269,84 @@ const CategoryReports = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-4 border-b pb-2">
-        گزارش‌های موجودی
-      </h1>
+      <div className="flex items-center justify-between mb-4 border-b pb-2 flex-wrap gap-2">
+        <h1 className="text-3xl font-bold text-gray-900">گزارش‌های موجودی</h1>
+        <CategoryReportsDownload />
+      </div>
 
-      {/* ─── Total Values ─── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+      {/* ─── Grand Totals (per-currency) ─── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {/* Carpet AFN */}
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🧶</span>
+            <span className="font-semibold text-gray-700 text-sm">
+              ارزش فرش (افغانی)
+            </span>
+          </div>
+          <div className="text-xl font-bold text-amber-700">
+            {carpetTotals.afn.toLocaleString()} ؋
+          </div>
+        </div>
+        {/* Carpet USD */}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🧶</span>
+            <span className="font-semibold text-gray-700 text-sm">
+              ارزش فرش (دالر)
+            </span>
+          </div>
+          <div className="text-xl font-bold text-emerald-700">
+            {carpetTotals.usd.toLocaleString()} $
+          </div>
+        </div>
+        {/* Carpet AFN-equivalent */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🧶</span>
-            <span className="font-semibold text-gray-700">مجموع ارزش فرش‌ها:</span>
+            <span className="font-semibold text-gray-700 text-sm">
+              معادل افغانی کل
+            </span>
           </div>
-          <div className="text-2xl font-bold text-blue-700">
-            {carpetTotalValue.toLocaleString()} دالر
+          <div className="text-xl font-bold text-blue-700">
+            {carpetTotals.afnEquivalent.toLocaleString()} ؋
           </div>
         </div>
+        {/* Blankets */}
         <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🧵</span>
-            <span className="font-semibold text-gray-700">مجموع ارزش کمپل‌ها:</span>
+            <span className="font-semibold text-gray-700 text-sm">
+              ارزش کمپل‌ها (افغانی)
+            </span>
           </div>
-          <div className="text-2xl font-bold text-purple-700">
-            {blanketTotalValue.toLocaleString()} افغانی
+          <div className="text-xl font-bold text-purple-700">
+            {blanketTotalValue.toLocaleString()} ؋
           </div>
         </div>
       </div>
 
-      {/* ─── Carpet Section (unchanged) ─── */}
+      {/* ─── Carpet Section ─── */}
       <div className="mb-8">
-        <h2 className="text-2xl font-bold text-gray-800 border-b border-gray-200 pb-2 mb-4 flex items-center gap-3">
+        <h2 className="text-2xl font-bold text-gray-800 border-b border-gray-200 pb-2 mb-4 flex items-center gap-3 flex-wrap">
           <span>🧶</span> گزارش موجودی فرش‌ها
-          <span className="text-sm font-normal text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-            مجموع ارزش: {carpetTotalValue.toLocaleString()} دالر
+          <span className="text-xs font-normal text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+            ؋ {carpetTotals.afn.toLocaleString()} + ${" "}
+            {carpetTotals.usd.toLocaleString()} (معادل ؋{" "}
+            {carpetTotals.afnEquivalent.toLocaleString()})
           </span>
         </h2>
 
         {!categories.length ? (
-          <p className="text-gray-500 text-center py-8">هیچ دسته‌بندی با رول فرش یافت نشد.</p>
+          <p className="text-gray-500 text-center py-8">
+            هیچ دسته‌بندی با رول فرش یافت نشد.
+          </p>
         ) : (
           <div className="space-y-8">
             {categories.map((category) => (
               <CategoryCard
                 key={category.id}
                 category={category}
-                currency="دالر"
                 editingId={editingId}
                 editForm={editForm}
                 saving={saving}
@@ -303,7 +362,7 @@ const CategoryReports = () => {
         )}
       </div>
 
-      {/* ─── Blanket Section (now editable) ─── */}
+      {/* ─── Blanket Section (unchanged) ─── */}
       <div className="mt-12 pt-8 border-t-2 border-dashed border-gray-300">
         <h2 className="text-2xl font-bold text-gray-800 border-b border-gray-200 pb-2 mb-4 flex items-center gap-3">
           <span>🧵</span> گزارش موجودی کمپل (بلنکت)
@@ -434,7 +493,6 @@ const CategoryReports = () => {
         )}
       </div>
 
-      {/* Success toast */}
       {success && (
         <div className="fixed bottom-4 right-4 bg-green-100 border border-green-400 text-green-700 px-4 py-2 rounded-lg shadow-lg z-50">
           {success}
@@ -444,10 +502,9 @@ const CategoryReports = () => {
   );
 };
 
-// ─── Sub‑component: Category Card (for carpet) — unchanged ───
+// ─── Sub-component: Category Card (currency-aware) ─────────────────────
 const CategoryCard = ({
   category,
-  currency,
   editingId,
   editForm,
   saving,
@@ -460,6 +517,11 @@ const CategoryCard = ({
 }) => {
   const isEditing = (id) => editingId === id;
 
+  const summary = category.summary || {};
+  const catAfn = summary.stockValueAfn ?? 0;
+  const catUsd = summary.stockValueUsd ?? 0;
+  const catAfnEquiv = summary.stockValueAfnEquivalent ?? 0;
+
   return (
     <div className="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200 transition hover:shadow-lg">
       <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-6 py-4 border-b flex justify-between items-center flex-wrap gap-2">
@@ -471,17 +533,29 @@ const CategoryCard = ({
             </span>
           )}
         </h2>
-        <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-semibold">
-          ارزش رول‌ها: {category.summary?.totalStockValue?.toLocaleString() ?? 0} {currency}
+
+        {/* ✅ Per-currency breakdown */}
+        <div className="flex flex-wrap gap-2">
+          <div className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-xs font-semibold">
+            {catAfn.toLocaleString()} ؋
+          </div>
+          <div className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-xs font-semibold">
+            {catUsd.toLocaleString()} $
+          </div>
+          <div className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-semibold">
+            معادل: {catAfnEquiv.toLocaleString()} ؋
+          </div>
         </div>
       </div>
 
       <div className="p-6">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-2xl">📦</span>
-          <h3 className="text-xl font-medium text-gray-700">تعداد رول‌های فرش</h3>
+          <h3 className="text-xl font-medium text-gray-700">
+            تعداد رول‌های فرش
+          </h3>
           <span className="bg-green-100 text-green-800 text-xs font-semibold px-2.5 py-0.5 rounded-full">
-            {category.summary?.totalExistingIncomes ?? 0}
+            {summary.totalExistingIncomes ?? 0}
           </span>
         </div>
 
@@ -495,14 +569,15 @@ const CategoryCard = ({
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">شناسه</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">طول (متر)</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">عرض (متر)</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">مساحت (متر مربع)</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">مساحت (m²)</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">قیمت واحد</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">ارزش ({currency})</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">واحد</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">ارزش</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">رنگ</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">درجه</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">شماره لات</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">شناسه مشتری</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">تاریخ ایجاد</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">تاریخ</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">عملیات</th>
                 </tr>
               </thead>
@@ -550,8 +625,23 @@ const CategoryCard = ({
                             className="w-24 border border-gray-300 rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-500"
                           />
                         </td>
+                        <td className="px-4 py-2">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                              inc.isAfn
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {symbolFor(inc.isAfn)}
+                          </span>
+                        </td>
                         <td className="px-2 py-2 whitespace-nowrap text-sm font-semibold text-green-700">
-                          {((parseFloat(editForm.area) || 0) * (parseFloat(editForm.unit_price) || 0)).toLocaleString()} {currency}
+                          {(
+                            (parseFloat(editForm.area) || 0) *
+                            (parseFloat(editForm.unit_price) || 0)
+                          ).toLocaleString()}{" "}
+                          {symbolFor(inc.isAfn)}
                         </td>
                         <td className="px-2 py-2">
                           <input
@@ -616,8 +706,20 @@ const CategoryCard = ({
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.width}</td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.area}</td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.unit_price}</td>
+                      {/* ✅ New currency column */}
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                            inc.isAfn
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {symbolFor(inc.isAfn)} {currencyLabel(inc.isAfn)}
+                        </span>
+                      </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold text-green-700">
-                        {itemValue.toLocaleString()} {currency}
+                        {itemValue.toLocaleString()} {symbolFor(inc.isAfn)}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.color}</td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-700">{inc.degree}</td>

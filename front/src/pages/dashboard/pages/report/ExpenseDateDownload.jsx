@@ -28,7 +28,6 @@ const ExpenseDateDownload = () => {
         params: { from, to },
       });
 
-      // Guard: if no expenses at all
       if (!data?.expenses || data.expenses.length === 0) {
         alert("هیچ هزینه‌ای در این بازه یافت نشد");
         return;
@@ -37,7 +36,6 @@ const ExpenseDateDownload = () => {
       const doc = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
       doc.setR2L(false);
 
-      // Add Font
       doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
       doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
       doc.setFont("Vazirmatn");
@@ -46,11 +44,11 @@ const ExpenseDateDownload = () => {
       const formattedTo = moment(to).format("YYYY/MM/DD");
       const today = moment().format("YYYY/MM/DD");
 
-      // ─── Title ──────────────────────────────────────────────────
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
       const marginRight = 40;
 
+      // ─── Title (page 1) ──────────────────────────────────────────
       doc.setFontSize(14);
       doc.text(
         `گزارش هزینه‌ها از ${formattedFrom} تا ${formattedTo}`,
@@ -59,25 +57,22 @@ const ExpenseDateDownload = () => {
         { align: "right" }
       );
       doc.setFontSize(10);
-      doc.text(`تاریخ صدور: ${today}`, pageWidth - marginRight, 140, { align: "right" });
+      doc.text(`تاریخ صدور: ${today}`, pageWidth - marginRight, 140, {
+        align: "right",
+      });
 
       let startY = 160;
 
-      // ─── Helper: add a table for a group ─────────────────────
+      // ─── Helper: add a table for a group ─────────────────────────
+      // Returns true if the section rendered any content.
       const addExpenseTable = (items, title, isCalculated) => {
-        if (!items || items.length === 0) {
-          // Skip if empty
-          return;
-        }
+        if (!items || items.length === 0) return false;
 
-        // Section title
         doc.setFontSize(12);
         doc.text(title, pageWidth - marginRight, startY, { align: "right" });
         startY += 20;
 
-        const headers = [
-          ["مبلغ (؋)", "بابت", "توسط", "تاریخ", "شماره"],
-        ];
+        const headers = [["مبلغ (؋)", "بابت", "توسط", "تاریخ", "شماره"]];
         const body = items.map((expense) => [
           Number(expense.amount).toLocaleString(),
           expense.purpose || "—",
@@ -101,7 +96,7 @@ const ExpenseDateDownload = () => {
           headStyles: {
             font: "Vazirmatn",
             fontStyle: "normal",
-            fillColor: isCalculated ? [40, 160, 90] : [200, 160, 40], // green for calculated, orange/yellow for non
+            fillColor: isCalculated ? [40, 160, 90] : [200, 160, 40],
             textColor: [255, 255, 255],
             fontSize: 9,
             halign: "center",
@@ -110,43 +105,74 @@ const ExpenseDateDownload = () => {
         });
 
         startY = doc.lastAutoTable.finalY + 15;
+        return true;
       };
 
-      // ─── 1. Calculated Expenses ──────────────────────────────
-      const calculatedItems = data.calculated?.items || [];
-      if (calculatedItems.length > 0) {
-        addExpenseTable(calculatedItems, "هزینه‌های محاسبه شده", true);
+      // ─── 1. Fixed assets (formerly: calculated expenses) ─────────
+      const fixedAssetsItems = data.calculated?.items || [];
+      const renderedFixed = addExpenseTable(
+        fixedAssetsItems,
+        "دارایی ثابت",
+        true
+      );
+
+      // ─── 2. Consumption (formerly: non-calculated expenses) ──────
+      const consumptionItems = data.nonCalculated?.items || [];
+
+      // ✅ Page break BEFORE the second section if BOTH exist
+      if (renderedFixed && consumptionItems.length > 0) {
+        doc.addPage();
+        startY = 60; // top margin on the new page
       }
 
-      // ─── 2. Non-Calculated Expenses ──────────────────────────
-      const nonCalculatedItems = data.nonCalculated?.items || [];
-      if (nonCalculatedItems.length > 0) {
-        addExpenseTable(nonCalculatedItems, "هزینه‌های محاسبه نشده", false);
-      }
+      const renderedConsumption = addExpenseTable(
+        consumptionItems,
+        "مصرف",
+        false
+      );
 
-      // ─── Summary ──────────────────────────────────────────────
-      const totalCalculated = data.calculated?.total || 0;
-      const totalNonCalculated = data.nonCalculated?.total || 0;
+      // ─── Summary ─────────────────────────────────────────────────
+      const totalFixed = data.calculated?.total || 0;
+      const totalConsumption = data.nonCalculated?.total || 0;
       const totalAll = data.totalAmount || 0;
-      const countCalculated = data.calculated?.count || 0;
-      const countNonCalculated = data.nonCalculated?.count || 0;
+      const countFixed = data.calculated?.count || 0;
+      const countConsumption = data.nonCalculated?.count || 0;
 
-      doc.setFontSize(11);
-      doc.text(`مجموع هزینه‌های محاسبه شده: ${totalCalculated.toLocaleString()} ؋  (${countCalculated} مورد)`, pageWidth - marginRight, startY, { align: "right" });
-      startY += 20;
-      doc.text(`مجموع هزینه‌های محاسبه نشده: ${totalNonCalculated.toLocaleString()} ؋  (${countNonCalculated} مورد)`, pageWidth - marginRight, startY, { align: "right" });
-      startY += 20;
-      doc.setFontSize(12);
-      doc.setTextColor(0, 100, 0);
-      doc.text(`جمع کل هزینه‌ها: ${totalAll.toLocaleString()} ؋`, pageWidth - marginRight, startY, { align: "right" });
-      doc.setTextColor(0, 0, 0);
+      if (renderedFixed || renderedConsumption) {
+        doc.setFontSize(11);
+        doc.text(
+          `مجموع دارایی ثابت: ${totalFixed.toLocaleString()} ؋  (${countFixed} مورد)`,
+          pageWidth - marginRight,
+          startY,
+          { align: "right" }
+        );
+        startY += 20;
+        doc.text(
+          `مجموع مصرف: ${totalConsumption.toLocaleString()} ؋  (${countConsumption} مورد)`,
+          pageWidth - marginRight,
+          startY,
+          { align: "right" }
+        );
+        startY += 20;
+        doc.setFontSize(12);
+        doc.setTextColor(0, 100, 0);
+        doc.text(
+          `جمع کل هزینه‌ها: ${totalAll.toLocaleString()} ؋`,
+          pageWidth - marginRight,
+          startY,
+          { align: "right" }
+        );
+        doc.setTextColor(0, 0, 0);
+      }
 
-      // ─── Page numbers ────────────────────────────────────────
+      // ─── Page numbers ────────────────────────────────────────────
       const pageCount = doc.internal.getNumberOfPages();
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(9);
-        doc.text(`${i}/${pageCount}`, pageWidth - marginRight, pageHeight - 40, { align: "right" });
+        doc.text(`${i}/${pageCount}`, pageWidth - marginRight, pageHeight - 40, {
+          align: "right",
+        });
       }
 
       doc.save(`Expenses_${formattedFrom}_to_${formattedTo}_${today}.pdf`);
