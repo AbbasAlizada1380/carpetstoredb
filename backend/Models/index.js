@@ -15,12 +15,17 @@ import Exist from "./Stock/exist.js";
 import bExist from "./Stock/bExist.js";
 import Bincome from "./Stock/bincome.js";
 import BSales from "./Stock/BSales.js"; // 👈 NEW: import BSales model
+import Holder from "./holder/Holder.js";
+import Valet from "./holder/Valet.js";
 
 // ---------- Define associations ----------
 
 // Type ↔ Category
 Type.hasMany(Category, { foreignKey: "typeId", as: "categoryList" });
 Category.belongsTo(Type, { foreignKey: "typeId", as: "type" });
+
+Holder.hasMany(Valet, { foreignKey: "holder", as: "Valets" });
+Valet.belongsTo(Holder, { foreignKey: "holder", as: "Holder" });
 
 // Category ↔ Sells (carpet sales)
 Category.hasMany(Sells, { foreignKey: "categoryId", as: "sells" });
@@ -105,4 +110,6 @@ export {
   bExist,
   Bincome,
   BSales, // 👈 NEW: export BSales
+  Holder,
+  Valet
 };

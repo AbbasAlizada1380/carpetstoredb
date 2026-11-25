@@ -1,7 +1,7 @@
 // Sidebar.js (Corrected Role Handling with Financial Dashboard navigation)
 
 import React, { useState } from "react";
-import { FaBuilding, FaSignOutAlt, FaChartLine } from "react-icons/fa"; // Import FaChartLine
+import { FaBuilding, FaSignOutAlt, FaChartLine, FaList } from "react-icons/fa"; // Import FaChartLine
 import { useSelector, useDispatch } from "react-redux";
 import { signOutSuccess } from "../../state/userSlice/userSlice";
 import { useNavigate } from "react-router-dom";
@@ -67,11 +67,11 @@ const Sidebar = ({ setActiveComponent }) => {
     //   value: "buyer",
     //   icon: <MdAttachMoney />,
     // },
-    // {
-    //   name: "فروشندها",
-    //   value: "customer",
-    //   icon: <MdFactory />,
-    // },
+    {
+      name: "سهام داران",
+      value: "holders",
+      icon: <FaList />,
+    },
     {
       name: "قروض",
       value: "pay",

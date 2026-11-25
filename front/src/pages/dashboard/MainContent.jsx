@@ -13,6 +13,7 @@ import PayManager from "./pages/finance/PayManager.jsx";
 import ReceiptManager from "./pages/finance/ReceiptManager.jsx";
 import OtherIncomeManager from "./pages/finance/OtherIncomeManager.jsx";
 import SalesAndCustomers from "./pages/Sales/SalesAndCustomers.jsx";
+import WalletPage from "./pages/valet/WalletPage.jsx";
 const MainContent = ({ activeComponent }) => {
   const renderContent = () => {
     switch (activeComponent) {
@@ -38,6 +39,8 @@ const MainContent = ({ activeComponent }) => {
         return <StaffManager />;
       case "Stock":
         return <Stock />;
+      case "holders":
+        return <WalletPage />;
       case "ExpenseManager":
         return <ExpenseManager />;
       case "otherincome":

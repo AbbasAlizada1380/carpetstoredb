@@ -1,3 +1,4 @@
+// components/report/CombinedReportsDownload.jsx
 import React, { useState } from "react";
 import axios from "axios";
 import jsPDF from "jspdf";
@@ -48,10 +49,10 @@ const CombinedReportsDownload = () => {
         const dueAFN = isUSD ? (dv > 0 ? dueRaw * dv : dueRaw) : dueRaw;
         return {
           name,
-          dueRaw, // original currency amount
+          dueRaw,
           isAfn: !isUSD,
           DV: dv,
-          dueAFN, // AFN-equivalent
+          dueAFN,
           details: Array.isArray(item?.details) ? item.details : [],
         };
       })
@@ -59,7 +60,6 @@ const CombinedReportsDownload = () => {
 
     const totalAFS = parseNumber(totals.afn);
     const totalUSD = parseNumber(totals.usd);
-    // Unified AFN-equivalent: prefer explicit AFN total + USD × its account DVs
     const totalAFN =
       totalAFS + rows.filter((r) => !r.isAfn).reduce((s, r) => s + r.dueAFN, 0);
 
@@ -106,6 +106,21 @@ const CombinedReportsDownload = () => {
     return { rows, totalRemainingAFN, totalReceivedAFN };
   };
 
+  // ── Other incomes normalizer ──────────────────────────────────────────
+  // API: { success, data: [{ id, amount, for, description, createdAt }],
+  //        summary: { totalRecords, totalAmount } }
+  const normalizeOtherIncomes = (raw) => {
+    const list = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.data)
+        ? raw.data
+        : [];
+    const summaryTotal = parseNumber(raw?.summary?.totalAmount);
+    const computedTotal = list.reduce((s, inc) => s + parseNumber(inc.amount), 0);
+    const total = raw?.summary?.totalAmount !== undefined ? summaryTotal : computedTotal;
+    return { items: list, total, count: list.length };
+  };
+
   const fetchAllData = async () => {
     const params = new URLSearchParams();
     if (fromDate) params.append("startDate", fromDate);
@@ -116,7 +131,7 @@ const CombinedReportsDownload = () => {
     if (toDate) expenseParams.append("to", toDate);
 
     const [
-      payments, receipts, expensesData, salaries, otherIncomes,
+      payments, receipts, expensesData, salaries, otherIncomesRaw,
       categoryData, blanketStock, incomeBills, bills,
       customerUnpaidRes, buyerUnpaidRes,
     ] = await Promise.all([
@@ -124,7 +139,8 @@ const CombinedReportsDownload = () => {
       axios.get(`${BASE_URL}/receipt/filter?${params.toString()}`).then((r) => r.data || []),
       axios.get(`${BASE_URL}/expense/date_range?${expenseParams.toString()}`).then((r) => r.data),
       axios.get(`${BASE_URL}/attendance/date-range?${expenseParams.toString()}`).then((r) => r.data.data || []),
-      axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`).then((r) => r.data.data || []),
+      // ✅ keep full payload so we can use summary.totalAmount
+      axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`).then((r) => r.data),
       axios.get(`${BASE_URL}/category/reports`).then((res) => {
         const apiData = res.data;
         if (apiData && typeof apiData === "object" && !Array.isArray(apiData)) {
@@ -147,6 +163,7 @@ const CombinedReportsDownload = () => {
 
     const calculatedExpenses = expensesData.calculated?.items || [];
     const nonCalculatedExpenses = expensesData.nonCalculated?.items || [];
+    const otherIncomes = normalizeOtherIncomes(otherIncomesRaw);
 
     return {
       payments, receipts, calculatedExpenses, nonCalculatedExpenses, salaries, otherIncomes,
@@ -170,7 +187,8 @@ const CombinedReportsDownload = () => {
 
     // ── آمد (cash only: receipts + other incomes) ──
     const totalReceipts = receipts.reduce((s, r) => s + toAFN(r, "amountofmoney"), 0);
-    const totalOtherIncomes = otherIncomes.reduce((s, inc) => s + parseNumber(inc.amount), 0);
+    // ✅ use normalized otherIncomes.total (server summary when available)
+    const totalOtherIncomes = otherIncomes.total;
     const totalBillsAFN_display = bills.reduce(
       (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"), 0
     );
@@ -200,7 +218,7 @@ const CombinedReportsDownload = () => {
       },
       inflow: {
         receipts: { items: receipts, total: totalReceipts },
-        otherIncomes: { items: otherIncomes, total: totalOtherIncomes },
+        otherIncomes, // ✅ { items, total, count }
         bills: { items: bills, totalAFN_display: totalBillsAFN_display, count: bills.length },
         totalAFN: inflowAFN,
       },
@@ -229,10 +247,6 @@ const CombinedReportsDownload = () => {
   };
 
   // ── RTL table helper ──────────────────────────────────────
-  // Columns are written in reading order (first = rightmost). The helper
-  // reverses them so the first column is drawn on the right, and adds the
-  // totals row as the table's last row (shown once, on the table's last page).
-  // columnStyles and didParseCell keep using the reading-order index.
   const rtlTable = (doc, y, {
     head, body, totals, headColor, totalsColor = [40, 40, 40], totalsFill = [240, 240, 240],
     fontSize = 9, columnStyles = {}, totalsStyles = {}, didParseCell, styles = {}, headStyles = {},
@@ -268,456 +282,484 @@ const CombinedReportsDownload = () => {
   };
 
   // ── PDF ───────────────────────────────────────────────────
-  const handlePDFDownload = async () => {
-    if (!fromDate || !toDate) {
-      alert("لطفاً بازه زمانی را انتخاب کنید");
-      return;
+const handlePDFDownload = async () => {
+  if (!fromDate || !toDate) {
+    alert("لطفاً بازه زمانی را انتخاب کنید");
+    return;
+  }
+  try {
+    setLoading(true);
+    const data = await fetchAllData();
+    const S = computeSections(data);
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    doc.setR2L(false);
+    doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
+    doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
+    doc.addFont("Vazirmatn.ttf", "Vazirmatn", "bold");
+    doc.setFont("Vazirmatn");
+
+    const today = moment().format("YYYY/MM/DD");
+    const rangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    const title = (t, y) => {
+      y = ensureSpace(doc, y, 1, 20);
+      doc.setFontSize(14); doc.setTextColor(30, 30, 30);
+      doc.text(t, pageWidth - 40, y, { align: "right" });
+      return y + 22;
+    };
+    const sub = (t, y) => {
+      y = ensureSpace(doc, y, 1, 16);
+      doc.setFontSize(11); doc.setTextColor(60, 60, 60);
+      doc.text(t, pageWidth - 40, y, { align: "right" });
+      return y + 16;
+    };
+    const line = (label, val, y, color = [40, 40, 40], size = 11) => {
+      y = ensureSpace(doc, y, 1, 16);
+      doc.setFontSize(size); doc.setTextColor(...color);
+      doc.text(`${label}: ${val}`, pageWidth - 40, y, { align: "right" });
+      doc.setTextColor(40, 40, 40);
+      return y + 16;
+    };
+    const note = (t, y) => {
+      y = ensureSpace(doc, y, 1, 12);
+      doc.setFontSize(9); doc.setTextColor(140, 100, 20);
+      doc.text(t, pageWidth - 40, y, { align: "right" });
+      doc.setTextColor(40, 40, 40);
+      return y + 14;
+    };
+    const empty = (t, y) => {
+      doc.setFontSize(10); doc.setTextColor(40, 40, 40);
+      doc.text(t, pageWidth - 40, y, { align: "right" });
+      return y + 20;
+    };
+
+    // Cover
+    doc.setFontSize(16);
+    doc.text(`گزارش جامع (${rangeStr})`, pageWidth - 40, 40, { align: "right" });
+    doc.setFontSize(10);
+    doc.text(`تاریخ تولید: ${today}`, pageWidth - 40, 62, { align: "right" });
+    
+    let y = 96;
+
+    // ═══ رفت ═══
+    y = title("بخش اول: رفت خروجی‌ها", y);
+
+    // مصرف
+    y = sub("هزینه‌های مصرف", y);
+    if (!S.outflow.consumption.items.length) {
+      y = empty("هیچ هزینه مصرفی یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
+        body: S.outflow.consumption.items.map((e) => [
+          e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—",
+          e.by || "نامشخص", moment(e.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: ["جمع", `${S.outflow.consumption.total.toLocaleString()} ؋`, "", "", ""],
+        headColor: [200, 160, 40],
+        totalsColor: [160, 60, 60],
+        totalsFill: [250, 240, 215],
+      });
     }
-    try {
-      setLoading(true);
-      const data = await fetchAllData();
-      const S = computeSections(data);
 
-      const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-      doc.setR2L(false);
-      doc.addFileToVFS("Vazirmatn.ttf", VazirmatnTTF);
-      doc.addFont("Vazirmatn.ttf", "Vazirmatn", "normal");
-      // Same file registered as "bold" so bold cells keep the Persian font
-      doc.addFont("Vazirmatn.ttf", "Vazirmatn", "bold");
-      doc.setFont("Vazirmatn");
+    // ★ بل‌های خرید — display only
+    y = ensureSpace(doc, y, 2, 18);
+    y = sub("بل‌های خرید", y);
+  
+    if (!S.outflow.incomeBills.items.length) {
+      y = empty("هیچ بل ورودی یافت نشد.", y);
+    } else {
+      const ib = buildIncomeBillRows(S.outflow.incomeBills.items, (b) =>
+        b.status === "paid" ? "پرداخت شده" : b.status === "partial" ? "جزئی" : "پرداخت نشده"
+      );
 
-      const today = moment().format("YYYY/MM/DD");
-      const rangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
-      const pageWidth = doc.internal.pageSize.getWidth();
-
-      const title = (t, y) => {
-        y = ensureSpace(doc, y, 1, 20);
-        doc.setFontSize(14); doc.setTextColor(30, 30, 30);
-        doc.text(t, pageWidth - 40, y, { align: "right" });
-        return y + 22;
-      };
-      const sub = (t, y) => {
-        y = ensureSpace(doc, y, 1, 16);
-        doc.setFontSize(11); doc.setTextColor(60, 60, 60);
-        doc.text(t, pageWidth - 40, y, { align: "right" });
-        return y + 16;
-      };
-      const line = (label, val, y, color = [40, 40, 40], size = 11) => {
-        y = ensureSpace(doc, y, 1, 16);
-        doc.setFontSize(size); doc.setTextColor(...color);
-        doc.text(`${label}: ${val}`, pageWidth - 40, y, { align: "right" });
-        doc.setTextColor(40, 40, 40);
-        return y + 16;
-      };
-      const note = (t, y) => {
-        y = ensureSpace(doc, y, 1, 12);
-        doc.setFontSize(9); doc.setTextColor(140, 100, 20);
-        doc.text(t, pageWidth - 40, y, { align: "right" });
-        doc.setTextColor(40, 40, 40);
-        return y + 14;
-      };
-      const empty = (t, y) => {
-        doc.setFontSize(10); doc.setTextColor(40, 40, 40);
-        doc.text(t, pageWidth - 40, y, { align: "right" });
-        return y + 20;
-      };
-
-      // Cover
-      doc.setFontSize(16);
-      doc.text(`گزارش جامع (${rangeStr})`, pageWidth - 40, 40, { align: "right" });
-      doc.setFontSize(10);
-      doc.text(`تاریخ تولید: ${today}`, pageWidth - 40, 62, { align: "right" });
-      doc.text("تبدیل هر رکورد بر اساس نرخ DV خودش", pageWidth - 40, 76, { align: "right" });
-
-      let y = 96;
-
-      // ═══ رفت ═══
-      y = title("بخش اول: رفت خروجی‌ها", y);
-
-      // مصرف
-      y = sub("هزینه‌های مصرف (مصرف)", y);
-      if (!S.outflow.consumption.items.length) {
-        y = empty("هیچ هزینه مصرفی یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
-          body: S.outflow.consumption.items.map((e) => [
-            e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—",
-            e.by || "نامشخص", moment(e.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: ["جمع", `${S.outflow.consumption.total.toLocaleString()} ؋`, "", "", ""],
-          headColor: [200, 160, 40],
-          totalsColor: [160, 60, 60],
-          totalsFill: [250, 240, 215],
-        });
-      }
-
-      // ★ بل‌های خرید — display only
-      y = ensureSpace(doc, y, 2, 18);
-      y = sub("بل‌های خرید (برای اطلاع — در محاسبه لحاظ نمی‌شود)", y);
-      y = note("این اطلاعات نمایشی است و در جمع رفت محاسبه نمی‌شود.", y);
-
-      if (!S.outflow.incomeBills.items.length) {
-        y = empty("هیچ بل ورودی یافت نشد.", y);
-      } else {
-        const ib = buildIncomeBillRows(S.outflow.incomeBills.items, (b) =>
-          b.status === "paid" ? "پرداخت شده" : b.status === "partial" ? "جزئی" : "پرداخت نشده"
-        );
-
-        y = rtlTable(doc, y, {
-          head: [
-            "شماره بل", "مشتری", "وضعیت", "مبلغ کل", "باقیمانده",
-            "واحد", "DV", "معادل کل (؋)", "معادل باقیمانده (؋)",
-            "پرداختی (رسیدها)", "تاریخ",
-          ],
-          body: ib.rows.map((r) => [
-            r.b.billNumber || r.b.id,
-            r.b.customer?.fullname || "—",
-            r.statusLabel,
-            parseNumber(r.b.totalAmount).toLocaleString(),
-            r.remainingRaw.toLocaleString(),
-            r.b.isAfn === true ? "؋" : "$",
-            r.dv.toLocaleString() || "—",
-            r.totalAFN.toLocaleString(),
-            r.remainingAFN.toLocaleString(),
-            r.receiptLabel,
-            moment(r.b.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: [
-            "جمع", "", "", "", "", "", "",
-            S.outflow.incomeBills.totalAFN_display.toLocaleString(),
-            ib.totalRemainingAFN.toLocaleString(),
-            ib.totalReceivedAFN.toLocaleString(),
-            "",
-          ],
-          headColor: [170, 120, 90],
-          headStyles: { fontSize: 7.5 },
-          fontSize: 7.5,
-          styles: { cellPadding: 2 },
-          columnStyles: {
-            3: { halign: "right" },
-            4: { halign: "right" },
-            7: { halign: "right" },
-            8: { halign: "right" },
-            9: { halign: "right", fontSize: 7 },
-          },
-          totalsColor: [90, 60, 20],
-          totalsFill: [250, 235, 215],
-          totalsStyles: {
-            7: { textColor: [120, 80, 30] }, // total AFN
-            8: { textColor: [180, 80, 0] },  // remaining
-            9: { textColor: [40, 120, 60] }, // receipts
-          },
-          didParseCell: (cell, col) => {
-            // Highlight bills that still have a remaining balance
-            if (cell.section === "body" && col === 4) {
-              const raw = cell.cell.raw?.toString().replace(/,/g, "") || "0";
-              if (parseFloat(raw) > 0) {
-                cell.cell.styles.textColor = [180, 80, 0];
-                cell.cell.styles.fontStyle = "bold";
-              }
+      y = rtlTable(doc, y, {
+        head: [
+          "شماره بل", "مشتری", "وضعیت", "مبلغ کل", "باقیمانده",
+          "واحد", "DV", "معادل کل (؋)", "معادل باقیمانده (؋)",
+          "پرداختی (رسیدها)", "تاریخ",
+        ],
+        body: ib.rows.map((r) => [
+          r.b.billNumber || r.b.id,
+          r.b.customer?.fullname || "—",
+          r.statusLabel,
+          parseNumber(r.b.totalAmount).toLocaleString(),
+          r.remainingRaw.toLocaleString(),
+          r.b.isAfn === true ? "؋" : "$",
+          r.dv.toLocaleString() || "—",
+          r.totalAFN.toLocaleString(),
+          r.remainingAFN.toLocaleString(),
+          r.receiptLabel,
+          moment(r.b.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: [
+          "جمع", "", "", "", "", "", "",
+          S.outflow.incomeBills.totalAFN_display.toLocaleString(),
+          ib.totalRemainingAFN.toLocaleString(),
+          ib.totalReceivedAFN.toLocaleString(),
+          "",
+        ],
+        headColor: [170, 120, 90],
+        headStyles: { fontSize: 7.5 },
+        fontSize: 7.5,
+        styles: { cellPadding: 2 },
+        columnStyles: {
+          3: { halign: "right" },
+          4: { halign: "right" },
+          7: { halign: "right" },
+          8: { halign: "right" },
+          9: { halign: "right", fontSize: 7 },
+        },
+        totalsColor: [90, 60, 20],
+        totalsFill: [250, 235, 215],
+        totalsStyles: {
+          7: { textColor: [120, 80, 30] },
+          8: { textColor: [180, 80, 0] },
+          9: { textColor: [40, 120, 60] },
+        },
+        didParseCell: (cell, col) => {
+          if (cell.section === "body" && col === 4) {
+            const raw = cell.cell.raw?.toString().replace(/,/g, "") || "0";
+            if (parseFloat(raw) > 0) {
+              cell.cell.styles.textColor = [180, 80, 0];
+              cell.cell.styles.fontStyle = "bold";
             }
-          },
-        });
-      }
-
-      // پرداخت‌ها
-      y = ensureSpace(doc, y, 1, 18);
-      y = sub("پرداخت‌ها به فروشندگان (در محاسبه)", y);
-      if (!S.outflow.pays.items.length) {
-        y = empty("هیچ پرداختی یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["ID", "فروشنده", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
-          body: S.outflow.pays.items.map((p) => [
-            p.id,
-            p.customer?.fullname || `فروشنده ${p.customerId}`,
-            parseNumber(p.amountofmoney).toLocaleString(),
-            p.isAfn !== false && p.is_Afs !== false ? "؋" : "$",
-            parseNumber(p.DV).toLocaleString() || "—",
-            toAFN(p, "amountofmoney").toLocaleString(),
-            moment(p.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: ["جمع", "", "", "", "", `${S.outflow.pays.totalAFN.toLocaleString()} ؋`, ""],
-          headColor: [160, 60, 60],
-          totalsColor: [160, 60, 60],
-          totalsFill: [248, 228, 228],
-        });
-      }
-
-      // Section 1 total
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(160, 60, 60); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      y = line("جمع کل رفت (مصرف + پرداخت‌ها)", `${S.outflow.totalAFN.toLocaleString()} ؋`, y, [160, 40, 40], 13);
-      y = note("بل‌های خرید در این جمع لحاظ نشده‌اند.", y);
-      doc.setDrawColor(0, 0, 0);
-
-      // ═══ آمد ═══
-      y = startNewPage(doc);
-      y = title("بخش دوم: آمد ورودی‌ها — اضافه می‌شود", y);
-
-      y = sub("رسیدهای خریداران (در محاسبه)", y);
-      if (!S.inflow.receipts.items.length) {
-        y = empty("هیچ رسیدی یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["ID", "خریدار", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
-          body: S.inflow.receipts.items.map((r) => [
-            r.id,
-            r.buyer?.fullname || `خریدار ${r.buyerId}`,
-            parseNumber(r.amountofmoney).toLocaleString(),
-            r.isAfn === false ? "$" : "؋",
-            parseNumber(r.DV).toLocaleString() || "—",
-            toAFN(r, "amountofmoney").toLocaleString(),
-            moment(r.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: ["جمع", "", "", "", "", `${S.inflow.receipts.total.toLocaleString()} ؋`, ""],
-          headColor: [40, 120, 60],
-          totalsColor: [40, 120, 60],
-          totalsFill: [225, 242, 228],
-        });
-      }
-
-      y = ensureSpace(doc, y, 1, 18);
-      y = sub("عایدهای متفرقه (در محاسبه)", y);
-      if (!S.inflow.otherIncomes.items.length) {
-        y = empty("هیچ عاید متفرقه‌ای یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"],
-          body: S.inflow.otherIncomes.items.map((inc, idx) => [
-            idx + 1, inc.for, parseNumber(inc.amount).toLocaleString(),
-            inc.description || "-", moment(inc.createdAt).format("YYYY/MM/DD HH:mm"),
-          ]),
-          totals: ["جمع", "", `${S.inflow.otherIncomes.total.toLocaleString()} ؋`, "", ""],
-          headColor: [40, 120, 60],
-          totalsColor: [40, 120, 60],
-          totalsFill: [225, 242, 228],
-        });
-      }
-
-      // ★ بل‌ها — display only
-      y = ensureSpace(doc, y, 2, 18);
-      y = sub("بل‌ها (برای اطلاع — در محاسبه لحاظ نمی‌شود)", y);
-      y = note("این اطلاعات نمایشی است و در جمع آمد محاسبه نمی‌شود.", y);
-      if (!S.inflow.bills.items.length) {
-        y = empty("هیچ بل یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["ID", "مشتری", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
-          body: S.inflow.bills.items.map((b) => [
-            b.id,
-            b.customer?.fullname || b.customerName || "—",
-            parseNumber(b.amount ?? b.totalAmount).toLocaleString(),
-            b.isAfn === false ? "$" : "؋",
-            parseNumber(b.DV).toLocaleString() || "—",
-            toAFN(b, b.amount !== undefined ? "amount" : "totalAmount").toLocaleString(),
-            moment(b.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: [
-            `جمع (${S.inflow.bills.count} مورد)`, "", "", "", "",
-            `${S.inflow.bills.totalAFN_display.toLocaleString()} ؋`, "",
-          ],
-          fontSize: 8,
-          headColor: [90, 150, 110],
-          totalsColor: [60, 120, 80],
-          totalsFill: [228, 242, 232],
-        });
-      }
-
-      // Section 2 total
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(40, 120, 60); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      y = line("جمع کل آمد (رسیدها + عاید متفرقه)", `${S.inflow.totalAFN.toLocaleString()} ؋`, y, [30, 100, 50], 13);
-      y = note("بل‌ها در این جمع لحاظ نشده‌اند.", y);
-      doc.setDrawColor(0, 0, 0);
-
-      // ═══ سرمایه ═══
-      y = startNewPage(doc);
-      y = title("بخش سوم: سرمایه بدون تأثیر بر مانده", y);
-      doc.setFontSize(10); doc.setTextColor(80, 80, 80);
-      doc.text("این بخش اطلاعاتی است و در محاسبه مانده لحاظ نمی‌شود.", pageWidth - 40, y, { align: "right" });
-      doc.setTextColor(40, 40, 40);
-      y += 22;
-
-      const capitalTotals = { headColor: [80, 80, 140], totalsColor: [80, 80, 140], totalsFill: [230, 230, 245] };
-
-      y = sub("موجودی کالاها", y);
-      if (!data.categoryData.categories.length) {
-        y = empty("هیچ دسته‌بندی با کالای موجود یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)", "DV", "معادل (؋)"],
-          body: data.categoryData.categories.map((cat) => {
-            const usd = parseNumber(cat.summary?.totalStockValue);
-            const dv = parseNumber(cat.summary?.DV ?? cat.DV);
-            return [
-              cat.name, cat.type?.name || "بدون نوع",
-              cat.summary?.totalExistingIncomes || 0,
-              usd.toLocaleString(),
-              dv > 0 ? dv.toLocaleString() : "—",
-              (dv > 0 ? usd * dv : usd).toLocaleString(),
-            ];
-          }),
-          totals: ["جمع", "", "", "", "", `${S.capital.stockAFN.toLocaleString()} ؋`],
-          ...capitalTotals,
-        });
-      }
-
-      y = ensureSpace(doc, y, 1, 18);
-      y = sub("موجودی کمپل (بلنکت)", y);
-      if (!data.blanketStock.length) {
-        y = empty("هیچ موجودی کمپل یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["دسته", "تعداد", "قیمت واحد (؋)", "ارزش کل (؋)"],
-          body: data.blanketStock.map((item) => [
-            item.category?.name || `دسته ${item.categoryId}`,
-            item.quantity,
-            parseNumber(item.unitPrice).toLocaleString(),
-            parseNumber(item.totalValue).toLocaleString(),
-          ]),
-          totals: ["جمع", "", "", `${S.capital.blanketAFN.toLocaleString()} ؋`],
-          ...capitalTotals,
-        });
-      }
-
-      y = ensureSpace(doc, y, 1, 18);
-      y = sub("هزینه‌های دارایی ثابت (سرمایه‌ای)", y);
-      if (!S.capital.fixedAssets.items.length) {
-        y = empty("هیچ هزینه دارایی ثابت یافت نشد.", y);
-      } else {
-        y = rtlTable(doc, y, {
-          head: ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
-          body: S.capital.fixedAssets.items.map((e) => [
-            e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—",
-            e.by || "نامشخص", moment(e.createdAt).format("YYYY/MM/DD"),
-          ]),
-          totals: ["جمع", `${S.capital.fixedAssets.total.toLocaleString()} ؋`, "", "", ""],
-          ...capitalTotals,
-        });
-      }
-
-      y = ensureSpace(doc, y, 2, 18);
-      doc.setDrawColor(80, 80, 140); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      y = line("جمع سرمایه اطلاعاتی", `${S.capital.totalAFN.toLocaleString()} ؋`, y, [80, 80, 140], 13);
-      doc.setDrawColor(0, 0, 0);
-
-      // ═══ مانده ═══
-      y = startNewPage(doc);
-      y = title("نتیجه: محاسبه مانده", y);
-
-      const rows = [
-        ["آمد (رسیدها + عاید متفرقه)", `+ ${S.inflow.totalAFN.toLocaleString()} ؋`],
-        ["رفت (مصرف + پرداخت‌ها)", `− ${S.outflow.totalAFN.toLocaleString()} ؋`],
-        ["سرمایه (بدون تأثیر)", `${S.capital.totalAFN.toLocaleString()} ؋`],
-      ];
-      for (const [label, val] of rows) {
-        y = line(label, val, y);
-        y += 2;
-      }
-      y = note("بل‌ها و بل‌های خرید فقط نمایشی هستند و در مانده لحاظ نمی‌شوند.", y);
-
-      y = ensureSpace(doc, y, 1, 24);
-      doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.5);
-      doc.line(pageWidth - 260, y - 6, pageWidth - 40, y - 6);
-      y += 12;
-
-      doc.setFontSize(14);
-      doc.setTextColor(...(S.balance >= 0 ? [0, 120, 0] : [180, 0, 0]));
-      doc.text(
-        `مانده نهایی: ${S.balance.toLocaleString()} ؋ (${S.balance >= 0 ? "مثبت" : "منفی"})`,
-        pageWidth - 40, y, { align: "right" }
-      );
-      doc.setTextColor(0, 0, 0);
-
-      // ═══ وضعیت حساب‌ها ═══
-      y = startNewPage(doc);
-      y = title("وضعیت حساب‌ها (اطلاعاتی — خارج از مانده)", y);
-      doc.setFontSize(10); doc.setTextColor(80, 80, 80);
-      doc.text("این بخش خلاصه وضعیت طلب و بدهی است و در محاسبه مانده لحاظ نمی‌شود.", pageWidth - 40, y, { align: "right" });
-      doc.setTextColor(40, 40, 40);
-      y += 22;
-
-      const outstandingTable = (o, nameHeader, headColor, totalsFill) =>
-        rtlTable(doc, y, {
-          head: ["#", nameHeader, "مبلغ بدهی", "واحد", "DV", "معادل (؋)"],
-          body: o.rows.map((r, i) => [
-            i + 1, r.name,
-            r.dueRaw.toLocaleString(),
-            r.isAfn ? "؋" : "$",
-            r.DV > 0 ? r.DV.toLocaleString() : "—",
-            r.dueAFN.toLocaleString(),
-          ]),
-          totals: [
-            `جمع (${o.count} مورد)`, "",
-            `؋ ${o.totalAFS.toLocaleString()} + $ ${o.totalUSD.toLocaleString()}`,
-            "", "",
-            `${o.totalAFN.toLocaleString()} ؋`,
-          ],
-          columnStyles: { 2: { halign: "right" }, 5: { halign: "right" } },
-          headColor,
-          totalsColor: headColor,
-          totalsFill,
-        });
-
-      // طلب از مشتریان
-      y = sub("طلب از مشتریان (بدهی مشتریان به ما)", y);
-      if (!S.outstanding.customersOwe.rows.length) {
-        y = empty("هیچ مشتری بدهکاری وجود ندارد.", y);
-      } else {
-        y = outstandingTable(S.outstanding.customersOwe, "مشتری", [120, 100, 40], [245, 238, 220]);
-      }
-
-      // بدهی به فروشندگان
-      y = ensureSpace(doc, y, 1, 18);
-      y = sub("بدهی به فروشندگان (بدهی ما به فروشندگان)", y);
-      if (!S.outstanding.weOweSellers.rows.length) {
-        y = empty("هیچ فروشنده‌ای طلبکار نیست.", y);
-      } else {
-        y = outstandingTable(S.outstanding.weOweSellers, "فروشنده", [100, 40, 120], [240, 228, 245]);
-      }
-
-      // خلاصه خالص
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.5);
-      doc.line(pageWidth - 320, y, pageWidth - 40, y);
-      y += 14;
-
-      const netOutstanding =
-        S.outstanding.customersOwe.totalAFN - S.outstanding.weOweSellers.totalAFN;
-      y = line(
-        "خالص وضعیت (طلب ما − بدهی ما)",
-        `${netOutstanding.toLocaleString()} ؋  (${netOutstanding >= 0 ? "به نفع ما" : "به ضرر ما"})`,
-        y,
-        netOutstanding >= 0 ? [0, 120, 0] : [180, 0, 0],
-        12
-      );
-
-      // Page numbers
-      const pageCount = doc.internal.getNumberOfPages();
-      const pageHeight = doc.internal.pageSize.getHeight();
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setFontSize(9);
-        doc.text(`${i}/${pageCount}`, pageWidth - 40, pageHeight - 30, { align: "right" });
-      }
-
-      doc.save(`combined_report_${moment().format("YYYY-MM-DD")}.pdf`);
-    } catch (err) {
-      console.error(err);
-      alert("خطا در ایجاد گزارش جامع");
-    } finally {
-      setLoading(false);
+          }
+        },
+      });
     }
-  };
 
+    // پرداخت‌ها
+    y = ensureSpace(doc, y, 1, 18);
+    y = sub("پرداخت‌ها به فروشندگان", y);
+    if (!S.outflow.pays.items.length) {
+      y = empty("هیچ پرداختی یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["ID", "فروشنده", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
+        body: S.outflow.pays.items.map((p) => [
+          p.id,
+          p.customer?.fullname || `فروشنده ${p.customerId}`,
+          parseNumber(p.amountofmoney).toLocaleString(),
+          p.isAfn !== false && p.is_Afs !== false ? "؋" : "$",
+          parseNumber(p.DV).toLocaleString() || "—",
+          toAFN(p, "amountofmoney").toLocaleString(),
+          moment(p.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: ["جمع", "", "", "", "", `${S.outflow.pays.totalAFN.toLocaleString()} ؋`, ""],
+        headColor: [160, 60, 60],
+        totalsColor: [160, 60, 60],
+        totalsFill: [248, 228, 228],
+      });
+    }
+
+    // Section 1 total
+    y = ensureSpace(doc, y, 3, 18);
+    doc.setDrawColor(160, 60, 60); doc.setLineWidth(1);
+    doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
+    y += 16;
+    doc.setDrawColor(0, 0, 0);
+
+    // ═══ آمد ═══
+    y = startNewPage(doc);
+    y = title("بخش دوم: آمد ورودی‌ها", y);
+
+    y = sub("رسیدهای خریداران", y);
+    if (!S.inflow.receipts.items.length) {
+      y = empty("هیچ رسیدی یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["ID", "خریدار", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
+        body: S.inflow.receipts.items.map((r) => [
+          r.id,
+          r.buyer?.fullname || `خریدار ${r.buyerId}`,
+          parseNumber(r.amountofmoney).toLocaleString(),
+          r.isAfn === false ? "$" : "؋",
+          parseNumber(r.DV).toLocaleString() || "—",
+          toAFN(r, "amountofmoney").toLocaleString(),
+          moment(r.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: ["جمع", "", "", "", "", `${S.inflow.receipts.total.toLocaleString()} ؋`, ""],
+        headColor: [40, 120, 60],
+        totalsColor: [40, 120, 60],
+        totalsFill: [225, 242, 228],
+      });
+    }
+
+    y = ensureSpace(doc, y, 1, 18);
+    y = sub("عایدهای متفرقه", y);
+    if (!S.inflow.otherIncomes.items.length) {
+      y = empty("هیچ عاید متفرقه‌ای یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["#", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ ثبت"],
+        body: S.inflow.otherIncomes.items.map((inc, idx) => [
+          idx + 1,
+          inc.for || "—",
+          parseNumber(inc.amount).toLocaleString(),
+          inc.description || "-",
+          moment(inc.createdAt).format("YYYY/MM/DD HH:mm"),
+        ]),
+        totals: ["جمع", "", `${S.inflow.otherIncomes.total.toLocaleString()} ؋`, "", ""],
+        headColor: [40, 120, 60],
+        totalsColor: [40, 120, 60],
+        totalsFill: [225, 242, 228],
+      });
+    }
+
+    // ★ بل‌ها — display only
+    y = ensureSpace(doc, y, 2, 18);
+    y = sub("بل‌های فروش", y);
+    if (!S.inflow.bills.items.length) {
+      y = empty("هیچ بل یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["ID", "مشتری", "مبلغ", "واحد", "DV", "معادل (؋)", "تاریخ"],
+        body: S.inflow.bills.items.map((b) => [
+          b.id,
+          b.buyer?.fullname || b.customerName || "—",
+          parseNumber(b.amount ?? b.totalAmount).toLocaleString(),
+          b.isAfn === false ? "$" : "؋",
+          parseNumber(b.DV).toLocaleString() || "—",
+          toAFN(b, b.amount !== undefined ? "amount" : "totalAmount").toLocaleString(),
+          moment(b.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: [
+          `جمع (${S.inflow.bills.count} مورد)`, "", "", "", "",
+          `${S.inflow.bills.totalAFN_display.toLocaleString()} ؋`, "",
+        ],
+        fontSize: 8,
+        headColor: [90, 150, 110],
+        totalsColor: [60, 120, 80],
+        totalsFill: [228, 242, 232],
+      });
+    }
+
+    // Section 2 total
+    y = ensureSpace(doc, y, 3, 18);
+    doc.setDrawColor(40, 120, 60); doc.setLineWidth(1);
+    doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
+    y += 16;
+    doc.setDrawColor(0, 0, 0);
+
+    // ═══ سرمایه ═══
+    y = startNewPage(doc);
+    y = title("بخش سوم: سرمایه بدون تأثیر بر مانده", y);
+    doc.setFontSize(10); doc.setTextColor(80, 80, 80);
+    doc.setTextColor(40, 40, 40);
+    y += 22;
+
+    const capitalTotals = { headColor: [80, 80, 140], totalsColor: [80, 80, 140], totalsFill: [230, 230, 245] };
+
+    y = sub("موجودی کالاها", y);
+    if (!data.categoryData.categories.length) {
+      y = empty("هیچ دسته‌بندی با کالای موجود یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)", "DV", "معادل (؋)"],
+        body: data.categoryData.categories.map((cat) => {
+          const usd = parseNumber(cat.summary?.totalStockValue);
+          const dv = parseNumber(cat.summary?.DV ?? cat.DV);
+          return [
+            cat.name, cat.type?.name || "بدون نوع",
+            cat.summary?.totalExistingIncomes || 0,
+            usd.toLocaleString(),
+            dv > 0 ? dv.toLocaleString() : "—",
+            (dv > 0 ? usd * dv : usd).toLocaleString(),
+          ];
+        }),
+        totals: ["جمع", "", "", "", "", `${S.capital.stockAFN.toLocaleString()} ؋`],
+        ...capitalTotals,
+      });
+    }
+
+    y = ensureSpace(doc, y, 1, 18);
+    y = sub("موجودی کمپل (بلنکت)", y);
+    if (!data.blanketStock.length) {
+      y = empty("هیچ موجودی کمپل یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["دسته", "تعداد", "قیمت واحد (؋)", "ارزش کل (؋)"],
+        body: data.blanketStock.map((item) => [
+          item.category?.name || `دسته ${item.categoryId}`,
+          item.quantity,
+          parseNumber(item.unitPrice).toLocaleString(),
+          parseNumber(item.totalValue).toLocaleString(),
+        ]),
+        totals: ["جمع", "", "", `${S.capital.blanketAFN.toLocaleString()} ؋`],
+        ...capitalTotals,
+      });
+    }
+
+    y = ensureSpace(doc, y, 1, 18);
+    y = sub("هزینه‌های دارایی ثابت", y);
+    if (!S.capital.fixedAssets.items.length) {
+      y = empty("هیچ هزینه دارایی ثابت یافت نشد.", y);
+    } else {
+      y = rtlTable(doc, y, {
+        head: ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
+        body: S.capital.fixedAssets.items.map((e) => [
+          e.id, parseNumber(e.amount).toLocaleString(), e.purpose || "—",
+          e.by || "نامشخص", moment(e.createdAt).format("YYYY/MM/DD"),
+        ]),
+        totals: ["جمع", `${S.capital.fixedAssets.total.toLocaleString()} ؋`, "", "", ""],
+        ...capitalTotals,
+      });
+    }
+
+    y = ensureSpace(doc, y, 2, 18);
+    doc.setDrawColor(80, 80, 140); doc.setLineWidth(1);
+    doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
+    y += 16;
+    y = line("جمع سرمایه اطلاعاتی", `${S.capital.totalAFN.toLocaleString()} ؋`, y, [80, 80, 140], 13);
+    doc.setDrawColor(0, 0, 0);
+
+    // ═══ وضعیت حساب‌ها ═══
+    y = startNewPage(doc);
+    y = title("وضعیت حساب‌ها (اطلاعاتی — خارج از مانده)", y);
+    doc.setFontSize(10); doc.setTextColor(80, 80, 80);
+    doc.setTextColor(40, 40, 40);
+    y += 22;
+
+    const outstandingTable = (o, nameHeader, headColor, totalsFill) =>
+      rtlTable(doc, y, {
+        head: ["#", nameHeader, "مبلغ بدهی", "واحد", "DV", "معادل (؋)"],
+        body: o.rows.map((r, i) => [
+          i + 1, r.name,
+          r.dueRaw.toLocaleString(),
+          r.isAfn ? "؋" : "$",
+          r.DV > 0 ? r.DV.toLocaleString() : "—",
+          r.dueAFN.toLocaleString(),
+        ]),
+        totals: [
+          `جمع (${o.count} مورد)`, "",
+          `؋ ${o.totalAFS.toLocaleString()} + $ ${o.totalUSD.toLocaleString()}`,
+          "", "",
+          `${o.totalAFN.toLocaleString()} ؋`,
+        ],
+        columnStyles: { 2: { halign: "right" }, 5: { halign: "right" } },
+        headColor,
+        totalsColor: headColor,
+        totalsFill,
+      });
+
+    // طلب از مشتریان
+    y = sub("قرض به فروشنده ها", y);
+    if (!S.outstanding.customersOwe.rows.length) {
+      y = empty("هیچ مشتری بدهکاری وجود ندارد.", y);
+    } else {
+      y = outstandingTable(S.outstanding.customersOwe, "مشتری", [120, 100, 40], [245, 238, 220]);
+    }
+
+    // بدهی به فروشندگان
+    y = ensureSpace(doc, y, 1, 18);
+    y = sub("طلب از مشتریان ", y);
+    if (!S.outstanding.weOweSellers.rows.length) {
+      y = empty("هیچ فروشنده‌ای طلبکار نیست.", y);
+    } else {
+      y = outstandingTable(S.outstanding.weOweSellers, "فروشنده", [100, 40, 120], [240, 228, 245]);
+    }
+
+    // خلاصه خالص
+    y = ensureSpace(doc, y, 3, 18);
+    doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.5);
+    doc.line(pageWidth - 320, y, pageWidth - 40, y);
+    y += 14;
+
+        // ═══════════════════════════════════════════════════════════════════
+    // ★★★ NEW: مفاد ناخالص and مفاد خالص ★★★
+    // ═══════════════════════════════════════════════════════════════════
+    y = ensureSpace(doc, y, 6, 20);
+
+    // 1. Calculate the required totals
+    const billsTotalAFN = data.bills.reduce(
+      (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"), 
+      0
+    );
+    
+    const incomeBillsTotalAFN = data.incomeBills.reduce(
+      (s, b) => s + toAFN(b, "totalAmount"), 
+      0
+    );
+
+    // For expenses, we use consumption (خرچ) + pays (پرداخت‌ها) 
+    // If you only mean 'nonCalculatedExpenses', remove the pays part.
+    const expensesTotalAFN = S.outflow.consumption.total + S.outflow.pays.totalAFN;
+    
+    const otherIncomesTotalAFN = S.inflow.otherIncomes.total;
+
+    // 2. Apply the formulas
+    const grossProfit = billsTotalAFN - incomeBillsTotalAFN;
+    const netProfit = grossProfit - expensesTotalAFN + otherIncomesTotalAFN;
+
+    // 3. Render مفاد ناخالص
+    doc.setFontSize(13);
+    doc.setTextColor(30, 30, 30);
+    doc.text("مفاد ناخالص (جمع کل بل‌های فروش - جمع کل بل‌های خرید):", pageWidth - 40, y, { align: "right" });
+    y += 18;
+    y = line(
+      "مفاد ناخالص",
+      `${grossProfit.toLocaleString()} ؋`,
+      y,
+      grossProfit >= 0 ? [0, 120, 0] : [180, 0, 0],
+      12
+    );
+    
+    // Small breakdown note for Gross
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(
+      `(راهنما: بل‌های فروش ${billsTotalAFN.toLocaleString()} - بل‌های خرید ${incomeBillsTotalAFN.toLocaleString()})`,
+      pageWidth - 40,
+      y,
+      { align: "right" }
+    );
+    doc.setTextColor(40, 40, 40);
+    y += 24;
+
+    // 4. Render مفاد خالص
+    doc.setFontSize(13);
+    doc.setTextColor(30, 30, 30);
+    doc.text("مفاد خالص مفاد خالص - خرچ + عاید متفرقه):", pageWidth - 40, y, { align: "right" });
+    y += 18;
+    y = line(
+      "مفاد خالص",
+      `${netProfit.toLocaleString()} ؋`,
+      y,
+      netProfit >= 0 ? [0, 120, 0] : [180, 0, 0],
+      14 // slightly larger for emphasis
+    );
+
+    // Small breakdown note for Net
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(
+      `(راهنما: مفاد ناخالص ${grossProfit.toLocaleString()} - خرچ ${expensesTotalAFN.toLocaleString()} + عاید متفرقه ${otherIncomesTotalAFN.toLocaleString()})`,
+      pageWidth - 40,
+      y,
+      { align: "right" }
+    );
+    doc.setTextColor(40, 40, 40);
+    y += 30;
+    // Page numbers
+    const pageCount = doc.internal.getNumberOfPages();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.text(`${i}/${pageCount}`, pageWidth - 40, pageHeight - 30, { align: "right" });
+    }
+
+    doc.save(`combined_report_${moment().format("YYYY-MM-DD")}.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert("خطا در ایجاد گزارش جامع");
+  } finally {
+    setLoading(false);
+  }
+};
   // ── Excel ─────────────────────────────────────────────────
   const handleExcelDownload = async () => {
     if (!fromDate || !toDate) {
@@ -730,13 +772,11 @@ const CombinedReportsDownload = () => {
       const S = computeSections(data);
 
       const wb = XLSX.utils.book_new();
-      // Show every sheet right-to-left (column A on the right)
       wb.Workbook = { Views: [{ RTL: true }] };
 
       const rangeStr = `${moment(fromDate).format("YYYY/MM/DD")} تا ${moment(toDate).format("YYYY/MM/DD")}`;
       const today = moment().format("YYYY/MM/DD");
 
-      // `totals` is a single row placed as the table's last row
       const addSheet = (name, headers, rows, totals) => {
         const sheet = XLSX.utils.aoa_to_sheet([
           [`گزارش جامع — ${name}`],
@@ -834,7 +874,10 @@ const CombinedReportsDownload = () => {
         "آمد - عاید متفرقه",
         ["ردیف", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ"],
         S.inflow.otherIncomes.items.map((inc, i) => [
-          i + 1, inc.for, parseNumber(inc.amount), inc.description || "-",
+          i + 1,
+          inc.for || "—",
+          parseNumber(inc.amount),
+          inc.description || "-",
           moment(inc.createdAt).format("YYYY/MM/DD HH:mm"),
         ]),
         ["جمع", "", S.inflow.otherIncomes.total, "", ""]
@@ -939,7 +982,7 @@ const CombinedReportsDownload = () => {
         ["طلب از مشتریان", `${S.outstanding.customersOwe.count} مورد`, S.outstanding.customersOwe.totalAFN, "خیر"],
         ["  — افغانی", "", S.outstanding.customersOwe.totalAFS, ""],
         ["  — دالر", "", S.outstanding.customersOwe.totalUSD, ""],
-        ["بدهی به فروشندگان", `${S.outstanding.weOweSellers.count} مورد`, S.outstanding.weOweSellers.totalAFN, "خیر"],
+        ["طلب از مشتریان", `${S.outstanding.weOweSellers.count} مورد`, S.outstanding.weOweSellers.totalAFN, "خیر"],
         ["  — افغانی", "", S.outstanding.weOweSellers.totalAFS, ""],
         ["  — دالر", "", S.outstanding.weOweSellers.totalUSD, ""],
         ["خالص وضعیت", "", S.outstanding.customersOwe.totalAFN - S.outstanding.weOweSellers.totalAFN, "خیر"],

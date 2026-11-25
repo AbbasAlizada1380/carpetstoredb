@@ -14,6 +14,7 @@ import {
 import Pagination from "../../../pagination/Pagination";
 import IncomeBillDetailsModal from "./IncomeBillDetailsModal";
 import IncomeBillDateDownload from "../../report/IncomeBillDateDownload";
+import SingleIncomeBillDownload from "../../report/SingleIncomeBillDownload";
 
 const BASE_URL = import.meta.env.VITE_BASE_URL;
 const API_BASE = `${BASE_URL}/incomebill`;
@@ -291,6 +292,7 @@ const IncomeBillManager = () => {
                           >
                             <FaEye />
                           </button>
+                          <SingleIncomeBillDownload billId={bill.id} />
                           <button
                             onClick={() => handleDelete(bill.id)}
                             className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"

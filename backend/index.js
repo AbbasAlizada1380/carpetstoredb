@@ -26,6 +26,8 @@ import bExistRoute from "./routes/Stock/bExistRoute.js";
 import bsalesRouter from "./routes/Stock/BSalesRoute.js";
 import { runBackfillBincomeInitialAmount } from "./Controllers/stock/bIncomeController.js";
 import incomeBillRouter from "./routes/bill/incomeBillRouter.js";
+import holderRoute from "./routes/holder/holderRoute.js";
+import Valetroute from "./routes/holder/ValetRoute.js";
 const FRONT_URL = process.env.FRONT_URL
 const port = 8038;
 const app = express();
@@ -94,6 +96,8 @@ app.use("/other-incomes", otherIncomeRouter);
 app.use("/bincome", bIncomeRoute)
 app.use("/bexist", bExistRoute)
 app.use("/bsales", bsalesRouter)
+app.use("/holders", holderRoute);
+app.use("/valets", Valetroute);
 
 // Sync database and start server
 sequelize
