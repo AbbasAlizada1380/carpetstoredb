@@ -34,8 +34,6 @@ const CombinedReportsDownload = () => {
     return dv > 0 ? amount * dv : amount;
   };
 
-  // Normalize unpaid → always preserves per-row currency for display,
-  // uses server `total` for the authoritative per-currency subtotals.
   const normalizeUnpaid = (raw) => {
     const list = Array.isArray(raw) ? raw : raw?.data || [];
     const totals = raw?.total || {};
@@ -66,7 +64,6 @@ const CombinedReportsDownload = () => {
     return { rows, totalAFN, totalAFS, totalUSD, count: rows.length };
   };
 
-  // Shared per-bill calculation for incoming bills (used by PDF and Excel)
   const buildIncomeBillRows = (items, statusLabel) => {
     let totalRemainingAFN = 0;
     let totalReceivedAFN = 0;
@@ -106,9 +103,6 @@ const CombinedReportsDownload = () => {
     return { rows, totalRemainingAFN, totalReceivedAFN };
   };
 
-  // ── Other incomes normalizer ──────────────────────────────────────────
-  // API: { success, data: [{ id, amount, for, description, createdAt }],
-  //        summary: { totalRecords, totalAmount } }
   const normalizeOtherIncomes = (raw) => {
     const list = Array.isArray(raw)
       ? raw
@@ -119,6 +113,20 @@ const CombinedReportsDownload = () => {
     const computedTotal = list.reduce((s, inc) => s + parseNumber(inc.amount), 0);
     const total = raw?.summary?.totalAmount !== undefined ? summaryTotal : computedTotal;
     return { items: list, total, count: list.length };
+  };
+
+  // ── Valets (deposit / withdraw) ─────────────────────────────────────
+  // Response shape:
+  // { valets: [], pagination: {...}, totals: { count, totalDeposit, totalWithdraw, net } }
+  const normalizeValets = (raw) => {
+    const t = raw?.totals || {};
+    return {
+      items: Array.isArray(raw?.valets) ? raw.valets : [],
+      count: parseNumber(t.count),
+      totalDeposit: parseNumber(t.totalDeposit),
+      totalWithdraw: parseNumber(t.totalWithdraw),
+      net: parseNumber(t.net),
+    };
   };
 
   const fetchAllData = async () => {
@@ -133,13 +141,12 @@ const CombinedReportsDownload = () => {
     const [
       payments, receipts, expensesData, salaries, otherIncomesRaw,
       categoryData, blanketStock, incomeBills, bills,
-      customerUnpaidRes, buyerUnpaidRes,
+      customerUnpaidRes, buyerUnpaidRes, valetsRaw,
     ] = await Promise.all([
       axios.get(`${BASE_URL}/pay/filter?${params.toString()}`).then((r) => r.data.data || []),
       axios.get(`${BASE_URL}/receipt/filter?${params.toString()}`).then((r) => r.data || []),
       axios.get(`${BASE_URL}/expense/date_range?${expenseParams.toString()}`).then((r) => r.data),
       axios.get(`${BASE_URL}/attendance/date-range?${expenseParams.toString()}`).then((r) => r.data.data || []),
-      // ✅ keep full payload so we can use summary.totalAmount
       axios.get(`${BASE_URL}/other-incomes/report?${params.toString()}`).then((r) => r.data),
       axios.get(`${BASE_URL}/category/reports`).then((res) => {
         const apiData = res.data;
@@ -159,16 +166,19 @@ const CombinedReportsDownload = () => {
       axios.get(`${BASE_URL}/bill/date-range?${expenseParams.toString()}`).then((r) => r.data?.bills || r.data?.data || []).catch(() => []),
       axios.get(`${BASE_URL}/customeraccount/unpaid`).then((r) => r.data).catch(() => ({ data: [], total: { afn: 0, usd: 0 } })),
       axios.get(`${BASE_URL}/buyeraccount/unpaid`).then((r) => r.data).catch(() => ({ data: [], total: { afn: 0, usd: 0 } })),
+      axios.get(`${BASE_URL}/valets?page=1&limit=10000`).then((r) => r.data).catch(() => ({ valets: [], totals: {} })),
     ]);
 
     const calculatedExpenses = expensesData.calculated?.items || [];
     const nonCalculatedExpenses = expensesData.nonCalculated?.items || [];
     const otherIncomes = normalizeOtherIncomes(otherIncomesRaw);
+    const valets = normalizeValets(valetsRaw);
 
     return {
       payments, receipts, calculatedExpenses, nonCalculatedExpenses, salaries, otherIncomes,
       categoryData, blanketStock, incomeBills, bills,
       customerUnpaid: customerUnpaidRes, buyerUnpaid: buyerUnpaidRes,
+      valets,
     };
   };
 
@@ -179,22 +189,18 @@ const CombinedReportsDownload = () => {
       customerUnpaid, buyerUnpaid,
     } = data;
 
-    // ── رفت (cash only: consumption + pays) ──
     const totalPaysAFN = payments.reduce((s, p) => s + toAFN(p, "amountofmoney"), 0);
     const totalConsumption = nonCalculatedExpenses.reduce((s, e) => s + parseNumber(e.amount), 0);
     const totalIbAFN_display = incomeBills.reduce((s, b) => s + toAFN(b, "totalAmount"), 0);
     const outflowAFN = totalPaysAFN + totalConsumption;
 
-    // ── آمد (cash only: receipts + other incomes) ──
     const totalReceipts = receipts.reduce((s, r) => s + toAFN(r, "amountofmoney"), 0);
-    // ✅ use normalized otherIncomes.total (server summary when available)
     const totalOtherIncomes = otherIncomes.total;
     const totalBillsAFN_display = bills.reduce(
       (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"), 0
     );
     const inflowAFN = totalReceipts + totalOtherIncomes;
 
-    // ── سرمایه ──
     const totalStockAFN = (categoryData.categories || []).reduce((sum, cat) => {
       const usd = parseNumber(cat.summary?.totalStockValue);
       const dv = parseNumber(cat.summary?.DV ?? cat.DV);
@@ -218,7 +224,7 @@ const CombinedReportsDownload = () => {
       },
       inflow: {
         receipts: { items: receipts, total: totalReceipts },
-        otherIncomes, // ✅ { items, total, count }
+        otherIncomes,
         bills: { items: bills, totalAFN_display: totalBillsAFN_display, count: bills.length },
         totalAFN: inflowAFN,
       },
@@ -231,6 +237,82 @@ const CombinedReportsDownload = () => {
       outstanding: { customersOwe, weOweSellers },
       balance,
     };
+  };
+
+  // ── Profit Calculation Helper ──────────────────────────────────────
+  const computeProfit = (data, S) => {
+    // 1. Total of Sales Bills
+    const billsTotalAFN = data.bills.reduce(
+      (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"), 0
+    );
+
+    // 2. Total of Buying Bills
+    const incomeBillsTotalAFN = data.incomeBills.reduce(
+      (s, b) => s + toAFN(b, "totalAmount"), 0
+    );
+
+    const totalCapital = S.capital.totalAFN;
+
+    // ارزش فروش = جمع بل‌های خرید - جمع بخش سرمایه
+    const valueOfSales = incomeBillsTotalAFN - totalCapital;
+
+    // مفاد ناخالص فروش = جمع بل‌های فروش - ارزش فروش
+    const grossProfitOfSales = billsTotalAFN - valueOfSales;
+
+    // مفاد ناخالص = مفاد ناخالص فروش + عاید متفرقه
+    const otherIncomesTotalAFN = S.inflow.otherIncomes.total;
+    const grossProfit = grossProfitOfSales + otherIncomesTotalAFN;
+
+    // مفاد خالص = مفاد ناخالص - هزینه‌های مصرف
+    const consumptionTotalAFN = S.outflow.consumption.total;
+    const netProfit = grossProfit - consumptionTotalAFN;
+
+    return {
+      billsTotalAFN,
+      incomeBillsTotalAFN,
+      totalCapital,
+      valueOfSales,
+      grossProfitOfSales,
+      otherIncomesTotalAFN,
+      grossProfit,
+      consumptionTotalAFN,
+      netProfit,
+    };
+  };
+
+  // ── رفته و آمده (Cash in hand) ─────────────────────────────────────
+  // آمده  = عایدهای متفرقه + رسیدهای خریداران + totalDeposit (valets)
+  // رفته  = هزینه‌های مصرف + هزینه‌های دارایی ثابت + پرداخت‌ها به فروشندگان + totalWithdraw (valets)
+  // موجودی نقد (پولی که باید موجود باشد) = آمده − رفته
+  const computeCashFlow = (data, S) => {
+    const v = data.valets;
+
+    const outRows = [
+      { label: "هزینه‌های مصرف", amount: S.outflow.consumption.total },
+      { label: "هزینه‌های دارایی ثابت", amount: S.capital.fixedAssets.total },
+      { label: "پرداخت‌ها به فروشندگان", amount: S.outflow.pays.totalAFN },
+      { label: "برداشت (ولت)", amount: v.totalWithdraw },
+    ];
+    const inRows = [
+      { label: "عایدهای متفرقه", amount: S.inflow.otherIncomes.total },
+      { label: "رسیدهای خریداران", amount: S.inflow.receipts.total },
+      { label: "تحویلی / واریز (ولت)", amount: v.totalDeposit },
+    ];
+
+    const totalOut = outRows.reduce((s, r) => s + r.amount, 0);
+    const totalIn = inRows.reduce((s, r) => s + r.amount, 0);
+    const cashBalance = totalIn - totalOut;
+
+    // side-by-side rows: [رفته, مبلغ, آمده, مبلغ]
+    const len = Math.max(outRows.length, inRows.length);
+    const pairedRows = Array.from({ length: len }, (_, i) => [
+      outRows[i]?.label ?? "",
+      outRows[i] ? outRows[i].amount : "",
+      inRows[i]?.label ?? "",
+      inRows[i] ? inRows[i].amount : "",
+    ]);
+
+    return { outRows, inRows, totalOut, totalIn, cashBalance, pairedRows };
   };
 
   const ensureSpace = (doc, y, lines = 1, lh = 16) => {
@@ -246,7 +328,6 @@ const CombinedReportsDownload = () => {
     return PAGE_MARGIN_TOP;
   };
 
-  // ── RTL table helper ──────────────────────────────────────
   const rtlTable = (doc, y, {
     head, body, totals, headColor, totalsColor = [40, 40, 40], totalsFill = [240, 240, 240],
     fontSize = 9, columnStyles = {}, totalsStyles = {}, didParseCell, styles = {}, headStyles = {},
@@ -281,7 +362,6 @@ const CombinedReportsDownload = () => {
     return doc.lastAutoTable.finalY + 14;
   };
 
-  // ── PDF ───────────────────────────────────────────────────
   const handlePDFDownload = async () => {
     if (!fromDate || !toDate) {
       alert("لطفاً بازه زمانی را انتخاب کنید");
@@ -315,20 +395,6 @@ const CombinedReportsDownload = () => {
         doc.text(t, pageWidth - 40, y, { align: "right" });
         return y + 16;
       };
-      const line = (label, val, y, color = [40, 40, 40], size = 11) => {
-        y = ensureSpace(doc, y, 1, 16);
-        doc.setFontSize(size); doc.setTextColor(...color);
-        doc.text(`${label}: ${val}`, pageWidth - 40, y, { align: "right" });
-        doc.setTextColor(40, 40, 40);
-        return y + 16;
-      };
-      const note = (t, y) => {
-        y = ensureSpace(doc, y, 1, 12);
-        doc.setFontSize(9); doc.setTextColor(140, 100, 20);
-        doc.text(t, pageWidth - 40, y, { align: "right" });
-        doc.setTextColor(40, 40, 40);
-        return y + 14;
-      };
       const empty = (t, y) => {
         doc.setFontSize(10); doc.setTextColor(40, 40, 40);
         doc.text(t, pageWidth - 40, y, { align: "right" });
@@ -345,8 +411,6 @@ const CombinedReportsDownload = () => {
 
       // ═══ رفت ═══
       y = title("بخش اول: رفت خروجی‌ها", y);
-
-      // مصرف
       y = sub("هزینه‌های مصرف", y);
       if (!S.outflow.consumption.items.length) {
         y = empty("هیچ هزینه مصرفی یافت نشد.", y);
@@ -364,17 +428,14 @@ const CombinedReportsDownload = () => {
         });
       }
 
-      // ★ بل‌های خرید — display only
       y = ensureSpace(doc, y, 2, 18);
       y = sub("بل‌های خرید", y);
-
       if (!S.outflow.incomeBills.items.length) {
         y = empty("هیچ بل ورودی یافت نشد.", y);
       } else {
         const ib = buildIncomeBillRows(S.outflow.incomeBills.items, (b) =>
           b.status === "paid" ? "پرداخت شده" : b.status === "partial" ? "جزئی" : "پرداخت نشده"
         );
-
         y = rtlTable(doc, y, {
           head: [
             "شماره بل", "مشتری", "وضعیت", "مبلغ کل", "باقیمانده",
@@ -406,10 +467,8 @@ const CombinedReportsDownload = () => {
           fontSize: 7.5,
           styles: { cellPadding: 2 },
           columnStyles: {
-            3: { halign: "right" },
-            4: { halign: "right" },
-            7: { halign: "right" },
-            8: { halign: "right" },
+            3: { halign: "right" }, 4: { halign: "right" },
+            7: { halign: "right" }, 8: { halign: "right" },
             9: { halign: "right", fontSize: 7 },
           },
           totalsColor: [90, 60, 20],
@@ -419,19 +478,9 @@ const CombinedReportsDownload = () => {
             8: { textColor: [180, 80, 0] },
             9: { textColor: [40, 120, 60] },
           },
-          didParseCell: (cell, col) => {
-            if (cell.section === "body" && col === 4) {
-              const raw = cell.cell.raw?.toString().replace(/,/g, "") || "0";
-              if (parseFloat(raw) > 0) {
-                cell.cell.styles.textColor = [180, 80, 0];
-                cell.cell.styles.fontStyle = "bold";
-              }
-            }
-          },
         });
       }
 
-      // پرداخت‌ها
       y = ensureSpace(doc, y, 1, 18);
       y = sub("پرداخت‌ها به فروشندگان", y);
       if (!S.outflow.pays.items.length) {
@@ -455,17 +504,9 @@ const CombinedReportsDownload = () => {
         });
       }
 
-      // Section 1 total
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(160, 60, 60); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      doc.setDrawColor(0, 0, 0);
-
       // ═══ آمد ═══
       y = startNewPage(doc);
       y = title("بخش دوم: آمد ورودی‌ها", y);
-
       y = sub("رسیدهای خریداران", y);
       if (!S.inflow.receipts.items.length) {
         y = empty("هیچ رسیدی یافت نشد.", y);
@@ -509,7 +550,6 @@ const CombinedReportsDownload = () => {
         });
       }
 
-      // ★ بل‌ها — display only
       y = ensureSpace(doc, y, 2, 18);
       y = sub("بل‌های فروش", y);
       if (!S.inflow.bills.items.length) {
@@ -537,17 +577,9 @@ const CombinedReportsDownload = () => {
         });
       }
 
-      // Section 2 total
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(40, 120, 60); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      doc.setDrawColor(0, 0, 0);
-
       // ═══ سرمایه ═══
       y = startNewPage(doc);
       y = title("بخش سوم: سرمایه بدون تأثیر بر مانده", y);
-      doc.setFontSize(10); doc.setTextColor(80, 80, 80);
       doc.setTextColor(40, 40, 40);
       y += 22;
 
@@ -560,20 +592,17 @@ const CombinedReportsDownload = () => {
         y = rtlTable(doc, y, {
           head: ["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)", "DV", "معادل (؋)"],
           body: data.categoryData.categories.map((cat) => {
-            // ✅ Read the exact fields from your API response
             const usd = parseNumber(cat.summary?.stockValueUsd);
             const afn = parseNumber(cat.summary?.stockValueAfnEquivalent);
-
-            // Calculate DV dynamically if not provided, otherwise fallback to 65
-            const dv = usd > 0 ? (afn / usd) : 65;
+            const dv = usd > 0 ? afn / usd : 65;
 
             return [
               cat.name,
               cat.type?.name || "بدون نوع",
               cat.summary?.totalExistingIncomes || 0,
-              usd.toLocaleString(),           // ✅ USD column
-              dv.toLocaleString(),            // ✅ DV column
-              afn.toLocaleString(),           // ✅ AFN column
+              usd.toLocaleString(),
+              dv.toLocaleString(),
+              afn.toLocaleString(),
             ];
           }),
           totals: ["جمع", "", "", "", "", `${S.capital.stockAFN.toLocaleString()} ؋`],
@@ -615,17 +644,9 @@ const CombinedReportsDownload = () => {
         });
       }
 
-      y = ensureSpace(doc, y, 2, 18);
-      doc.setDrawColor(80, 80, 140); doc.setLineWidth(1);
-      doc.line(PAGE_MARGIN_LEFT_RIGHT, y, pageWidth - PAGE_MARGIN_LEFT_RIGHT, y);
-      y += 16;
-      y = line("جمع سرمایه اطلاعاتی", `${S.capital.totalAFN.toLocaleString()} ؋`, y, [80, 80, 140], 13);
-      doc.setDrawColor(0, 0, 0);
-
       // ═══ وضعیت حساب‌ها ═══
       y = startNewPage(doc);
       y = title("وضعیت حساب‌ها (اطلاعاتی — خارج از مانده)", y);
-      doc.setFontSize(10); doc.setTextColor(80, 80, 80);
       doc.setTextColor(40, 40, 40);
       y += 22;
 
@@ -651,7 +672,6 @@ const CombinedReportsDownload = () => {
           totalsFill,
         });
 
-      // طلب از مشتریان
       y = sub("قرض به فروشنده ها", y);
       if (!S.outstanding.customersOwe.rows.length) {
         y = empty("هیچ مشتری بدهکاری وجود ندارد.", y);
@@ -659,7 +679,6 @@ const CombinedReportsDownload = () => {
         y = outstandingTable(S.outstanding.customersOwe, "مشتری", [120, 100, 40], [245, 238, 220]);
       }
 
-      // بدهی به فروشندگان
       y = ensureSpace(doc, y, 1, 18);
       y = sub("طلب از مشتریان ", y);
       if (!S.outstanding.weOweSellers.rows.length) {
@@ -667,97 +686,170 @@ const CombinedReportsDownload = () => {
       } else {
         y = outstandingTable(S.outstanding.weOweSellers, "فروشنده", [100, 40, 120], [240, 228, 245]);
       }
-      // خلاصه خالص
-      y = ensureSpace(doc, y, 3, 18);
-      doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.5);
-      doc.line(pageWidth - 320, y, pageWidth - 40, y);
-      y += 14;
 
-      // ═══════════════════════════════════════════════════════════════════
-      // ★★★ NEW: مفاد ناخالص and مفاد خالص ★★★
-      // ═══════════════════════════════════════════════════════════════════
-      y = ensureSpace(doc, y, 6, 20);
-
-      // 1. Calculate the required totals
-      const billsTotalAFN = data.bills.reduce(
-        (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"),
-        0
-      );
-
-      const incomeBillsTotalAFN = data.incomeBills.reduce(
-        (s, b) => s + toAFN(b, "totalAmount"),
-        0
-      );
-
-      // جمع سرمایه اطلاعاتی — already computed as S.capital.totalAFN
-      const informationCapitalTotalAFN = S.capital.totalAFN;
-
-      // For expenses, we use consumption (خرچ) + pays (پرداخت‌ها) 
-      // If you only mean 'nonCalculatedExpenses', remove the pays part.
-      const expensesTotalAFN = S.outflow.consumption.total + S.outflow.pays.totalAFN;
-
-      const otherIncomesTotalAFN = S.inflow.otherIncomes.total;
-
-      // 2. Apply the formulas
-      // ★ مفاد ناخالص now includes جمع سرمایه اطلاعاتی
-      const grossProfit = billsTotalAFN - incomeBillsTotalAFN + informationCapitalTotalAFN;
-      const netProfit = grossProfit - expensesTotalAFN + otherIncomesTotalAFN;
-
-      // 3. Render مفاد ناخالص
-      doc.setFontSize(13);
-      doc.setTextColor(30, 30, 30);
-      doc.text("مفاد ناخالص (جمع بل‌های فروش - جمع بل‌های خرید + جمع سرمایه اطلاعاتی):", pageWidth - 40, y, { align: "right" });
-      y += 18;
-      y = line(
-        "مفاد ناخالص",
-        `${grossProfit.toLocaleString()} ؋`,
-        y,
-        grossProfit >= 0 ? [0, 120, 0] : [180, 0, 0],
-        12
-      );
-
-      // Small breakdown note for Gross
-      doc.setFontSize(9);
-      doc.setTextColor(100, 100, 100);
-      doc.text(
-        `(راهنما: بل‌های فروش ${billsTotalAFN.toLocaleString()} - بل‌های خرید ${incomeBillsTotalAFN.toLocaleString()} + سرمایه اطلاعاتی ${informationCapitalTotalAFN.toLocaleString()})`,
-        pageWidth - 40,
-        y,
-        { align: "right" }
-      );
+      // ═══ جمع کل همه جداول ═══
+      y = startNewPage(doc);
+      y = title("جمع کل جداول گزارش", y);
       doc.setTextColor(40, 40, 40);
-      y += 24;
-
-      // 4. Render مفاد خالص
-      doc.setFontSize(13);
-      doc.setTextColor(30, 30, 30);
-      doc.text("مفاد خالص (مفاد ناخالص - خرچ + عاید متفرقه):", pageWidth - 40, y, { align: "right" });
       y += 18;
-      y = line(
-        "مفاد خالص",
-        `${netProfit.toLocaleString()} ؋`,
-        y,
-        netProfit >= 0 ? [0, 120, 0] : [180, 0, 0],
-        14 // slightly larger for emphasis
-      );
 
-      // Small breakdown note for Net
-      doc.setFontSize(9);
-      doc.setTextColor(100, 100, 100);
-      doc.text(
-        `(راهنما: مفاد ناخالص ${grossProfit.toLocaleString()} - خرچ ${expensesTotalAFN.toLocaleString()} + عاید متفرقه ${otherIncomesTotalAFN.toLocaleString()})`,
-        pageWidth - 40,
-        y,
-        { align: "right" }
-      );
+      y = rtlTable(doc, y, {
+        head: ["بخش", "زیربخش", "تعداد", "جمع (؋)"],
+        body: [
+          ["رفته", "هزینه‌های مصرف", S.outflow.consumption.items.length, S.outflow.consumption.total],
+          ["رفته", "بل‌های خرید (اطلاعاتی)", S.outflow.incomeBills.count, S.outflow.incomeBills.totalAFN_display],
+          ["رفته", "پرداخت‌ها به فروشندگان", S.outflow.pays.items.length, S.outflow.pays.totalAFN],
+          ["رفته", "جمع بخش رفته", "", S.outflow.totalAFN],
+          ["آمده", "رسیدهای خریداران", S.inflow.receipts.items.length, S.inflow.receipts.total],
+          ["آمده", "عایدهای متفرقه", S.inflow.otherIncomes.count, S.inflow.otherIncomes.total],
+          ["آمده", "بل‌های فروش (اطلاعاتی)", S.inflow.bills.count, S.inflow.bills.totalAFN_display],
+          ["آمده", "جمع بخش آمده", "", S.inflow.totalAFN],
+          ["سرمایه", "موجودی کالاها", data.categoryData.categories.length, S.capital.stockAFN],
+          ["سرمایه", "موجودی کمپل", data.blanketStock.length, S.capital.blanketAFN],
+          ["سرمایه", "هزینه‌های دارایی ثابت", S.capital.fixedAssets.items.length, S.capital.fixedAssets.total],
+          ["سرمایه", "جمع بخش سرمایه", "", S.capital.totalAFN],
+          ["وضعیت", "طلب از مشتریان", S.outstanding.customersOwe.count, S.outstanding.customersOwe.totalAFN],
+          ["وضعیت", "بدهی به فروشندگان", S.outstanding.weOweSellers.count, S.outstanding.weOweSellers.totalAFN],
+        ].map((r) => [
+          r[0], r[1],
+          r[2] === "" ? "" : Number(r[2]).toLocaleString(),
+          Number(r[3] || 0).toLocaleString(),
+        ]),
+        totals: [
+          "مانده نهایی",
+          "(آمد − رفته)",
+          "",
+          `${S.balance.toLocaleString()} ؋`,
+        ],
+        headColor: [60, 60, 90],
+        fontSize: 8,
+        columnStyles: {
+          1: { halign: "right" },
+          3: { halign: "right" },
+        },
+        totalsColor: S.balance >= 0 ? [0, 110, 0] : [180, 0, 0],
+        totalsFill: S.balance >= 0 ? [225, 242, 228] : [248, 228, 228],
+        totalsStyles: { 1: { fontStyle: "normal" }, 3: { fontStyle: "bold", fontSize: 10 } },
+        didParseCell: (cell) => {
+          if (cell.section === "body") {
+            const label = String(cell.cell.raw ?? "");
+            if (label.startsWith("جمع بخش")) {
+              cell.cell.styles.fontStyle = "bold";
+              cell.cell.styles.fillColor = [235, 235, 235];
+            }
+          }
+        },
+      });
+
+      // ═══ محاسبه مفاد و سود ═══
+      y = startNewPage(doc);
+      y = title("محاسبه مفاد و سود", y);
       doc.setTextColor(40, 40, 40);
-      y += 30;
+      y += 18;
+
+      const P = computeProfit(data, S);
+
+      y = rtlTable(doc, y, {
+        head: ["شرح", "فرمول", "مبلغ (؋)"],
+        body: [
+          ["ارزش فروش", "(جمع بل‌های خرید − جمع بخش سرمایه)", P.valueOfSales],
+          ["مفاد ناخالص فروش", "(جمع بل‌های فروش − ارزش فروش)", P.grossProfitOfSales],
+          ["مفاد ناخالص", "(مفاد ناخالص فروش + عاید متفرقه)", P.grossProfit],
+          ["مفاد خالص (سود)", "(مفاد ناخالص − هزینه‌های مصرف)", P.netProfit],
+        ].map((r) => [r[0], r[1], Number(r[2]).toLocaleString()]),
+        headColor: [80, 80, 140],
+        fontSize: 9,
+        columnStyles: {
+          0: { halign: "right", fontStyle: "bold" },
+          1: { halign: "right", textColor: [100, 100, 100], fontSize: 8 },
+          2: { halign: "right" },
+        },
+        totalsColor: [0, 110, 0],
+        totalsFill: [225, 242, 228],
+        styles: { cellPadding: 6 },
+        didParseCell: (cell, col) => {
+          if (cell.section === "body" && col === 2) {
+            if (String(cell.row.raw?.[0] || "").includes("مفاد خالص")) {
+              cell.cell.styles.textColor = [0, 110, 0];
+              cell.cell.styles.fontStyle = "bold";
+              cell.cell.styles.fontSize = 11;
+            }
+          }
+        },
+      });
+
+      // ═══ رفته و آمده — موجودی نقد ═══
+      y = startNewPage(doc);
+      y = title("جدول رفته و آمده (موجودی نقد)", y);
+      doc.setFontSize(9); doc.setTextColor(100, 100, 100);
+      doc.text(
+        "پولی که باید موجود باشد = جمع آمده − جمع رفته",
+        pageWidth - 40, y, { align: "right" }
+      );
+      y += 18;
+
+      const C = computeCashFlow(data, S);
+      const fmtCell = (v) => (v === "" ? "" : Number(v).toLocaleString());
+
+      y = rtlTable(doc, y, {
+        head: ["رفته", "مبلغ (؋)", "آمده", "مبلغ (؋)"],
+        body: C.pairedRows.map((r) => [r[0], fmtCell(r[1]), r[2], fmtCell(r[3])]),
+        totals: [
+          "جمع رفته", `${C.totalOut.toLocaleString()} ؋`,
+          "جمع آمده", `${C.totalIn.toLocaleString()} ؋`,
+        ],
+        headColor: [60, 60, 90],
+        fontSize: 10,
+        styles: { cellPadding: 6 },
+        columnStyles: {
+          0: { halign: "right" },
+          1: { halign: "right", textColor: [160, 40, 40] },
+          2: { halign: "right" },
+          3: { halign: "right", textColor: [30, 110, 50] },
+        },
+        totalsFill: [240, 240, 240],
+        totalsStyles: {
+          1: { textColor: [160, 40, 40] },
+          3: { textColor: [30, 110, 50] },
+        },
+        didParseCell: (cell, col) => {
+          if (cell.section === "head") {
+            cell.cell.styles.fillColor = col <= 1 ? [160, 60, 60] : [40, 120, 60];
+          }
+        },
+      });
+
+      const cashPositive = C.cashBalance >= 0;
+      y = rtlTable(doc, y, {
+        head: ["شرح", "محاسبه", "مبلغ (؋)"],
+        body: [[
+          "پولی که باید موجود باشد",
+          `${C.totalIn.toLocaleString()} − ${C.totalOut.toLocaleString()}`,
+          `${C.cashBalance.toLocaleString()} ؋`,
+        ]],
+        headColor: cashPositive ? [30, 110, 50] : [170, 30, 30],
+        fontSize: 11,
+        styles: { cellPadding: 8 },
+        columnStyles: {
+          0: { halign: "right", fontStyle: "bold" },
+          1: { halign: "center", textColor: [90, 90, 90], fontSize: 9 },
+          2: { halign: "right", fontStyle: "bold", fontSize: 13 },
+        },
+        didParseCell: (cell, col) => {
+          if (cell.section === "body") {
+            cell.cell.styles.fillColor = cashPositive ? [225, 242, 228] : [248, 228, 228];
+            if (col === 2) cell.cell.styles.textColor = cashPositive ? [0, 110, 0] : [180, 0, 0];
+          }
+        },
+      });
+
       // Page numbers
       const pageCount = doc.internal.getNumberOfPages();
       const pageHeight = doc.internal.pageSize.getHeight();
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(9);
+        doc.setTextColor(40, 40, 40);
         doc.text(`${i}/${pageCount}`, pageWidth - 40, pageHeight - 30, { align: "right" });
       }
 
@@ -769,8 +861,7 @@ const CombinedReportsDownload = () => {
       setLoading(false);
     }
   };
-  // ── Excel ─────────────────────────────────────────────────
-  // ── Excel ─────────────────────────────────────────────────
+
   const handleExcelDownload = async () => {
     if (!fromDate || !toDate) {
       alert("لطفاً بازه زمانی را انتخاب کنید");
@@ -799,9 +890,9 @@ const CombinedReportsDownload = () => {
         ]);
         sheet["!views"] = [{ RTL: true }];
         XLSX.utils.book_append_sheet(wb, sheet, name.slice(0, 31));
+        return sheet;
       };
 
-      // 1. رفت - مصرف
       addSheet(
         "رفت - مصرف",
         ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
@@ -812,7 +903,6 @@ const CombinedReportsDownload = () => {
         ["جمع", S.outflow.consumption.total, "", "", ""]
       );
 
-      // 2. رفت - بل ورودی (اطلاعاتی)
       {
         const ib = buildIncomeBillRows(S.outflow.incomeBills.items, (b) => b.status);
         addSheet(
@@ -845,7 +935,6 @@ const CombinedReportsDownload = () => {
         );
       }
 
-      // 3. رفت - پرداخت‌ها
       addSheet(
         "رفت - پرداخت‌ها",
         ["ID", "فروشنده", "مبلغ", "واحد", "DV", "معادل (؋)", "توضیحات", "تاریخ"],
@@ -862,7 +951,6 @@ const CombinedReportsDownload = () => {
         ["جمع", "", "", "", "", S.outflow.pays.totalAFN, "", ""]
       );
 
-      // 4. آمد - رسیدها
       addSheet(
         "آمد - رسیدها",
         ["ID", "خریدار", "مبلغ", "واحد", "DV", "معادل (؋)", "توضیحات", "تاریخ"],
@@ -879,7 +967,6 @@ const CombinedReportsDownload = () => {
         ["جمع", "", "", "", "", S.inflow.receipts.total, "", ""]
       );
 
-      // 5. آمد - عاید متفرقه
       addSheet(
         "آمد - عاید متفرقه",
         ["ردیف", "عنوان (بابت)", "مبلغ (؋)", "توضیحات", "تاریخ"],
@@ -893,7 +980,6 @@ const CombinedReportsDownload = () => {
         ["جمع", "", S.inflow.otherIncomes.total, "", ""]
       );
 
-      // 6. آمد - بل‌ها (اطلاعاتی)
       addSheet(
         "آمد - بل‌ها (اطلاعاتی)",
         ["ID", "مشتری", "مبلغ", "واحد", "DV", "معادل (؋)", "توضیحات", "تاریخ"],
@@ -910,8 +996,6 @@ const CombinedReportsDownload = () => {
         [`جمع (${S.inflow.bills.count} مورد)`, "", "", "", "", S.inflow.bills.totalAFN_display, "", ""]
       );
 
-      // 7. سرمایه - موجودی کالا
-      // ✅ Use the SAME fields as the PDF: stockValueUsd / stockValueAfnEquivalent
       addSheet(
         "سرمایه - موجودی کالا",
         ["دسته", "نوع", "تعداد کالا", "ارزش موجودی ($)", "DV", "معادل (؋)"],
@@ -931,7 +1015,6 @@ const CombinedReportsDownload = () => {
         ["جمع", "", "", "", "", S.capital.stockAFN]
       );
 
-      // 8. سرمایه - موجودی کمپل
       addSheet(
         "سرمایه - موجودی کمپل",
         ["دسته", "تعداد", "قیمت واحد (؋)", "ارزش کل (؋)"],
@@ -944,7 +1027,6 @@ const CombinedReportsDownload = () => {
         ["جمع", "", "", S.capital.blanketAFN]
       );
 
-      // 9. سرمایه - دارایی ثابت
       addSheet(
         "سرمایه - دارایی ثابت",
         ["شماره", "مبلغ (؋)", "بابت", "توسط", "تاریخ"],
@@ -955,7 +1037,6 @@ const CombinedReportsDownload = () => {
         ["جمع", S.capital.fixedAssets.total, "", "", ""]
       );
 
-      // 10 & 11. وضعیت حساب‌ها
       const outstandingSheet = (name, nameHeader, o) =>
         addSheet(
           name,
@@ -973,74 +1054,96 @@ const CombinedReportsDownload = () => {
       outstandingSheet("وضعیت - طلب از مشتریان", "مشتری", S.outstanding.customersOwe);
       outstandingSheet("وضعیت - بدهی به فروشندگان", "فروشنده", S.outstanding.weOweSellers);
 
-      // ── 12. خلاصه (مطابق PDF، شامل مفاد ناخالص و مفاد خالص) ──────────
-      // Calculate the same profit figures as the PDF
-      const billsTotalAFN = data.bills.reduce(
-        (s, b) => s + toAFN(b, b.amount !== undefined ? "amount" : "totalAmount"),
-        0
+      // ── Profit Section ──
+      const P = computeProfit(data, S);
+      addSheet(
+        "محاسبه مفاد و سود",
+        ["شرح", "فرمول", "راهنما / معادله (با اعداد)", "مبلغ (؋)"],
+        [
+          [
+            "ارزش فروش",
+            "(جمع بل‌های خرید − جمع بخش سرمایه)",
+            `${P.incomeBillsTotalAFN.toLocaleString()} − ${P.totalCapital.toLocaleString()} = ${P.valueOfSales.toLocaleString()}`,
+            P.valueOfSales,
+          ],
+          [
+            "مفاد ناخالص فروش",
+            "(جمع بل‌های فروش − ارزش فروش)",
+            `${P.billsTotalAFN.toLocaleString()} − ${P.valueOfSales.toLocaleString()} = ${P.grossProfitOfSales.toLocaleString()}`,
+            P.grossProfitOfSales,
+          ],
+          [
+            "مفاد ناخالص",
+            "(مفاد ناخالص فروش + عاید متفرقه)",
+            `${P.grossProfitOfSales.toLocaleString()} + ${P.otherIncomesTotalAFN.toLocaleString()} = ${P.grossProfit.toLocaleString()}`,
+            P.grossProfit,
+          ],
+          [
+            "مفاد خالص (سود)",
+            "(مفاد ناخالص − هزینه‌های مصرف)",
+            `${P.grossProfit.toLocaleString()} − ${P.consumptionTotalAFN.toLocaleString()} = ${P.netProfit.toLocaleString()}`,
+            P.netProfit,
+          ],
+        ],
+        null
       );
-      const incomeBillsTotalAFN = data.incomeBills.reduce(
-        (s, b) => s + toAFN(b, "totalAmount"),
-        0
+
+      // ── رفته و آمده (موجودی نقد) ──
+      const C = computeCashFlow(data, S);
+      const cashSheet = addSheet(
+        "رفته و آمده",
+        ["رفته", "مبلغ (؋)", "آمده", "مبلغ (؋)"],
+        [
+          ...C.pairedRows,
+          ["جمع رفته", C.totalOut, "جمع آمده", C.totalIn],
+          [],
+          ["پولی که باید موجود باشد (آمده − رفته)", "", `${C.totalIn.toLocaleString()} − ${C.totalOut.toLocaleString()}`, C.cashBalance],
+        ],
+        null
       );
-      // جمع سرمایه اطلاعاتی = همان مقدار نمایش‌داده‌شده در بخش سوم
-      const informationCapitalTotalAFN = S.capital.totalAFN;
+      cashSheet["!cols"] = [{ wch: 34 }, { wch: 16 }, { wch: 30 }, { wch: 16 }];
 
-      // خرچ = مصرف + پرداخت‌ها (same as PDF)
-      const expensesTotalAFN =
-        S.outflow.consumption.total + S.outflow.pays.totalAFN;
-
-      const otherIncomesTotalAFN = S.inflow.otherIncomes.total;
-
-      // مفاد ناخالص = بل‌های فروش − بل‌های خرید + سرمایه اطلاعاتی
-      const grossProfit =
-        billsTotalAFN - incomeBillsTotalAFN + informationCapitalTotalAFN;
-
-      // مفاد خالص = مفاد ناخالص − خرچ + عاید متفرقه
-      const netProfit =
-        grossProfit - expensesTotalAFN + otherIncomesTotalAFN;
+      const summaryRows = [
+        ["رفته", "هزینه‌های مصرف", S.outflow.consumption.items.length, S.outflow.consumption.total],
+        ["رفته", "بل‌های خرید (اطلاعاتی)", S.outflow.incomeBills.count, S.outflow.incomeBills.totalAFN_display],
+        ["رفته", "پرداخت‌ها به فروشندگان", S.outflow.pays.items.length, S.outflow.pays.totalAFN],
+        ["رفته", "جمع بخش رفته", "", S.outflow.totalAFN],
+        [],
+        ["آمده", "رسیدهای خریداران", S.inflow.receipts.items.length, S.inflow.receipts.total],
+        ["آمده", "عایدهای متفرقه", S.inflow.otherIncomes.count, S.inflow.otherIncomes.total],
+        ["آمده", "بل‌های فروش (اطلاعاتی)", S.inflow.bills.count, S.inflow.bills.totalAFN_display],
+        ["آمده", "جمع بخش آمده", "", S.inflow.totalAFN],
+        [],
+        ["سرمایه", "موجودی کالاها", data.categoryData.categories.length, S.capital.stockAFN],
+        ["سرمایه", "موجودی کمپل", data.blanketStock.length, S.capital.blanketAFN],
+        ["سرمایه", "هزینه‌های دارایی ثابت", S.capital.fixedAssets.items.length, S.capital.fixedAssets.total],
+        ["سرمایه", "جمع بخش سرمایه", "", S.capital.totalAFN],
+        [],
+        ["وضعیت", "طلب از مشتریان", S.outstanding.customersOwe.count, S.outstanding.customersOwe.totalAFN],
+        ["وضعیت", "بدهی به فروشندگان", S.outstanding.weOweSellers.count, S.outstanding.weOweSellers.totalAFN],
+        [],
+        ["مانده نهایی", "(آمد − رفته)", "", S.balance],
+        [],
+        ["— مفاد و سود —", "", "", ""],
+        ["ارزش فروش", "(جمع بل‌های خرید − جمع بخش سرمایه)", "", P.valueOfSales],
+        ["مفاد ناخالص فروش", "(جمع بل‌های فروش − ارزش فروش)", "", P.grossProfitOfSales],
+        ["مفاد ناخالص", "(مفاد ناخالص فروش + عاید متفرقه)", "", P.grossProfit],
+        ["مفاد خالص", "(مفاد ناخالص − هزینه‌های مصرف)", "", P.netProfit],
+        [],
+        ["— رفته و آمده (موجودی نقد) —", "", "", ""],
+        ...C.outRows.map((r) => ["رفته", r.label, "", r.amount]),
+        ["رفته", "جمع رفته", "", C.totalOut],
+        ...C.inRows.map((r) => ["آمده", r.label, "", r.amount]),
+        ["آمده", "جمع آمده", "", C.totalIn],
+        ["پولی که باید موجود باشد", "(جمع آمده − جمع رفته)", "", C.cashBalance],
+      ];
 
       const summary = XLSX.utils.aoa_to_sheet([
-        [`خلاصه و مانده (${rangeStr})`],
+        [`خلاصه و جمع کل جداول (${rangeStr})`],
         [`تاریخ تولید: ${today}`],
         [],
-        ["بخش", "زیربخش", "مبلغ (؋)", "در مانده لحاظ می‌شود؟"],
-        ["آمد", "رسیدها", S.inflow.receipts.total, "بله"],
-        ["آمد", "عایدهای متفرقه", S.inflow.otherIncomes.total, "بله"],
-        ["آمد", "بل‌ها (اطلاعاتی)", S.inflow.bills.totalAFN_display, "خیر"],
-        ["جمع آمد", "", S.inflow.totalAFN, "بله"],
-        [],
-        ["رفت", "مصرف", S.outflow.consumption.total, "بله"],
-        ["رفت", "بل ورودی (اطلاعاتی)", S.outflow.incomeBills.totalAFN_display, "خیر"],
-        ["رفت", "پرداخت‌ها", S.outflow.pays.totalAFN, "بله"],
-        ["جمع رفت", "", S.outflow.totalAFN, "بله"],
-        [],
-        ["سرمایه (بدون تأثیر)", "موجودی کالا معادل افغانی", S.capital.stockAFN, "خیر"],
-        ["سرمایه (بدون تأثیر)", "موجودی کمپل", S.capital.blanketAFN, "خیر"],
-        ["سرمایه (بدون تأثیر)", "دارایی ثابت", S.capital.fixedAssets.total, "خیر"],
-        ["جمع سرمایه", "", S.capital.totalAFN, "خیر"],
-        [],
-        ["مانده نهایی", "", S.balance, "—"],
-        [],
-        ["— مفاد (سود و زیان) —", "", "", ""],
-        ["مفاد ناخالص", "بل‌های فروش", billsTotalAFN, ""],
-        ["مفاد ناخالص", "منهای: بل‌های خرید", incomeBillsTotalAFN, ""],
-        ["مفاد ناخالص", "به‌علاوه: سرمایه اطلاعاتی", informationCapitalTotalAFN, ""],
-        ["مفاد ناخالص", "جمع مفاد ناخالص", grossProfit, ""],
-        [],
-        ["مفاد خالص", "مفاد ناخالص", grossProfit, ""],
-        ["مفاد خالص", "منهای: خرچ (مصرف + پرداخت‌ها)", expensesTotalAFN, ""],
-        ["مفاد خالص", "به‌علاوه: عاید متفرقه", otherIncomesTotalAFN, ""],
-        ["مفاد خالص", "جمع مفاد خالص", netProfit, ""],
-        [],
-        ["— وضعیت حساب‌ها (اطلاعاتی) —", "", "", ""],
-        ["طلب از مشتریان", `${S.outstanding.customersOwe.count} مورد`, S.outstanding.customersOwe.totalAFN, "خیر"],
-        ["  — افغانی", "", S.outstanding.customersOwe.totalAFS, ""],
-        ["  — دالر", "", S.outstanding.customersOwe.totalUSD, ""],
-        ["بدهی به فروشندگان", `${S.outstanding.weOweSellers.count} مورد`, S.outstanding.weOweSellers.totalAFN, "خیر"],
-        ["  — افغانی", "", S.outstanding.weOweSellers.totalAFS, ""],
-        ["  — دالر", "", S.outstanding.weOweSellers.totalUSD, ""],
-        ["خالص وضعیت", "", S.outstanding.customersOwe.totalAFN - S.outstanding.weOweSellers.totalAFN, "خیر"],
+        ["بخش", "زیربخش", "تعداد", "جمع (؋)"],
+        ...summaryRows,
       ]);
       summary["!views"] = [{ RTL: true }];
       XLSX.utils.book_append_sheet(wb, summary, "خلاصه");
